@@ -1,0 +1,17 @@
+[package]
+name = "ferro_js"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "ferrojs"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 2
+
+[profile.profiling]
+inherits = "release"
+debug = true
+
+[dependencies]
