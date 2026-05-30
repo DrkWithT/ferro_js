@@ -4,4 +4,4 @@ function fib(n) {
     return fib(n - 1) + fib(n - 2);
 }
 
-return fib(20);
+return fib(20) === 6765;

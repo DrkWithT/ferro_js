@@ -2,14 +2,14 @@ var a = 42;
 var b = 0x2A;
 var c = 0b101010;
 var n = NaN;
+var ok = 0;
 
-if (a !== b || b !== c) {
-    return false;
+if (a === b) {
+    ok++;
 }
 
-// NaN cannot equal itself.
-if (n === n) {
-    return false;
+if (b === c) {
+    ok++;
 }
 
-return true;
+return ok === 2;

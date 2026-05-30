@@ -5,7 +5,7 @@ var foo = {
     }
 };
 
-var barInfo = Object.getOwnPropertyDescriptor(foo, 'bar');
+var barInfo = Object.getOwnPropertyDescriptor(foo, "bar");
 barInfo.configurable = false;
 barInfo.writable = false;
 
