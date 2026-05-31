@@ -104,7 +104,7 @@ pub enum SyntaxData {
     },
     Vars {
         /// name token index --> initializer expr
-        vars: Vec<(usize, Box<SyntaxNode>)>,
+        vars: Vec<(usize, Option<Box<SyntaxNode>>)>,
     },
     Ifs {
         cond: Box<SyntaxNode>,

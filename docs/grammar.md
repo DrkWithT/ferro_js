@@ -15,7 +15,7 @@
 <property> = <identifier> : <expr>
 <array> = "[" (<expr> ("," <expr>)* )? "]"
 <lambda> = "function" "(" <identifier> ( "," <identifier> )* ")" <block>
-<member> = <primary> ( "." <identifier> | "[" <expr> "]" )*
+<member> = <primary> ( ( "." <identifier> | "[" <expr> "]" )* )?
 <new> = "new"? <member>
 <call> = <new> ( "(" ( <expr> ( "," <expr> )* )? ")" )?
 <postfix-unary> = <call> ( "++" | "--" )?

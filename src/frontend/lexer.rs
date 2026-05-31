@@ -200,7 +200,7 @@ impl<'source_lt> Lexer<'source_lt> {
                 },
                 'x' => {
                     // hex base int
-                    symbols = "0123456789abcdef";
+                    symbols = "0123456789abcdefABCDEF";
                     base_char = 'x';
                     self.consume();
                 },
@@ -220,7 +220,6 @@ impl<'source_lt> Lexer<'source_lt> {
                     // octal base via 0###
                     symbols = "01234567";
                     base_char = 'o';
-                    self.consume();
                 }
             }
         } else {
