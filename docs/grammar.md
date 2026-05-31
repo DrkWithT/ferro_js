@@ -10,7 +10,7 @@
 <hex-digit> = ( [a - f] | [0 - 9] )
 <param> = "..."? <identifier>
 
-<primary> = "undefined" | "null" | "this" | <identifier> | <boolean> | <number> | <string-literal> | <object> | <array> | <lambda> | "(" <expr> ")"
+<primary> = "undefined" | "null" | "NaN" | "this" | <identifier> | <boolean> | <numeric-literal> | <string-literal> | <object> | <array> | <lambda> | "(" <expr> ")"
 <object> = "{" (<property> ",")* "}"
 <property> = <identifier> : <expr>
 <array> = "[" (<expr> ("," <expr>)* )? "]"
@@ -24,7 +24,9 @@
 <term> = <factor> ( ( "+" | "-" ) <factor> )*
 <compare> = <term> ( ( "<" | ">" | "<=" | ">=" | "instanceof" ) <term> )*
 <equality> = <compare> ( ( "==" | "!=" | "===" | "!==" ) <compare> )*
-<logical-and> = <equality> ( "&&" <equality> )*
+<bit-and> = <equality> ( "&" <equality> )*
+<bit-or> = <bit-and> ( "&" <bit-and> )*
+<logical-and> = <bit-or> ( "&&" <bit-or> )*
 <logical-or> = <logical-and> ( "||" <logical-and> )*
 <expr> = <logical-or>
 ```
