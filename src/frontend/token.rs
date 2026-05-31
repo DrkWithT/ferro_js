@@ -24,9 +24,12 @@ pub enum TokenKind {
     KeywordFor,
     KeywordReturn,
     KeywordFunction,
+    KeywordNew,
+    KeywordThis,
     KeywordGet,
     KeywordSet,
     KeywordTypeOf,
+    KeywordVoid,
     KeywordDelete,
     Identifier,
     OperatorPlusPlus,
@@ -88,9 +91,12 @@ impl Display for TokenKind {
             Self::KeywordFor => "for",
             Self::KeywordReturn => "return",
             Self::KeywordFunction => "function",
+            Self::KeywordNew => "new",
+            Self::KeywordThis => "this",
             Self::KeywordGet => "get",
             Self::KeywordSet => "set",
             Self::KeywordTypeOf => "typeof",
+            Self::KeywordVoid => "void",
             Self::KeywordDelete => "delete",
             Self::Identifier => "(name)",
             Self::OperatorPlusPlus => "++",
@@ -140,6 +146,7 @@ impl Display for TokenKind {
     }
 }
 
+#[derive(Clone)]
 pub struct Token {
     pub begin: u32,
     pub end: u32,

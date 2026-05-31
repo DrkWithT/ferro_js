@@ -4,20 +4,30 @@ use crate::frontend::token::Token;
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Operator {
+    Noop,
     NegBool,
     ForceNum,
     NegNum,
+    New,
+    Delete,
+    TypeOf,
+    Void,
+    InstanceOf,
+    Inc,
+    Dec,
     ModuloNum,
-    MulNum,
-    DivNum,
-    AddNum,
-    SubNum,
+    Mul,
+    Div,
+    Add,
+    Sub,
     StrictEqual,
     StrictUnequal,
     Lesser,
     LessOrEqual,
     Greater,
     GreaterOrEqual,
+    BitAnd,
+    BitOr,
     LogicalAnd,
     LogicalOr,
     Assign,
@@ -26,9 +36,12 @@ pub enum Operator {
 #[repr(u8)]
 pub enum SyntaxId {
     Literal,
+    ObjectExpr,
+    ArrayExpr,
+    Lambda,
+    Lhs,
     Unary,
     Binary,
-    Access,
     Assign,
     Call,
     FuncDecl,
@@ -37,13 +50,32 @@ pub enum SyntaxId {
     Ifs,
     While,
     CLikeFor,
+    Break,
+    Continue,
     Return,
     ExprStmt,
+    EmptyStmt,
 }
 
 pub enum SyntaxData {
     /// Stores index into token buffer, saving memory
     Literal(usize),
+    ObjectExpr {
+        props: Vec<(usize, Box<SyntaxNode>)>,
+    },
+    ArrayExpr {
+        items: Vec<Box<SyntaxNode>>,
+    },
+    Lambda {
+        /// Contains indices to identifier tokens here, not the actual tokens!
+        params: Vec<usize>,
+        body: Box<SyntaxNode>,
+    },
+    Lhs {
+        /// Represents a sequence of LHS property / member accesses, but the `bool`` tells if 'bracketed' access applies.
+        accesses: Vec<(bool, Box<SyntaxNode>)>,
+        source: Box<SyntaxNode>,
+    },
     Unary {
         inner: Box<SyntaxNode>,
         op: Operator,
@@ -54,11 +86,6 @@ pub enum SyntaxData {
         r: Box<SyntaxNode>,
         op: Operator,
     },
-    Access {
-        parent: Box<SyntaxNode>,
-        key: Box<SyntaxNode>,
-        is_named: bool
-    },
     Assign {
         dest: Box<SyntaxNode>,
         src: Box<SyntaxNode>,
@@ -68,7 +95,7 @@ pub enum SyntaxData {
         callee: Box<SyntaxNode>,
     },
     FuncDecl {
-        args: Vec<Box<SyntaxNode>>,
+        params: Vec<usize>,
         body: Box<SyntaxNode>,
         name_tk_id: usize,
     },
@@ -94,21 +121,27 @@ pub enum SyntaxData {
         update: Box<SyntaxNode>,
         body: Box<SyntaxNode>,
     },
+    Break {},
+    Continue {},
     Return {
         out: Box<SyntaxNode>,
     },
     ExprStmt {
         inner: Box<SyntaxNode>,
-    }
+    },
+    EmptyStmt {}
 }
 
 impl SyntaxData {
     pub fn get_emitter_id(self) -> SyntaxId {
         match self {
             Self::Literal(_) => SyntaxId::Literal,
+            Self::ObjectExpr { .. } => SyntaxId::ObjectExpr,
+            Self::ArrayExpr {..} => SyntaxId::ArrayExpr,
+            Self::Lambda { .. } => SyntaxId::Lambda,
+            Self::Lhs {..} => SyntaxId::Lhs,
             Self::Unary {..} => SyntaxId::Unary,
             Self::Binary {..} => SyntaxId::Binary,
-            Self::Access {..} => SyntaxId::Access,
             Self::Assign {..} => SyntaxId::Assign,
             Self::Call {..} => SyntaxId::Call,
             Self::FuncDecl {..} => SyntaxId::FuncDecl,
@@ -117,8 +150,11 @@ impl SyntaxData {
             Self::Ifs {..} => SyntaxId::Ifs,
             Self::While {..} => SyntaxId::While,
             Self::CLikeFor {..} => SyntaxId::CLikeFor,
+            Self::Break {  } => SyntaxId::Break,
+            Self::Continue {  } => SyntaxId::Continue,
             Self::Return {..} => SyntaxId::Return,
             Self::ExprStmt {..} => SyntaxId::ExprStmt,
+            Self::EmptyStmt {} => SyntaxId::EmptyStmt,
         }
     }
 }
@@ -129,11 +165,10 @@ pub struct SyntaxNode {
     pub end_tk: usize,
 }
 
-pub struct AST {
-    /// stores the source file's path
-    pub file_path: String,    
+pub struct AST {    
     /// stores the source text string
     pub txt: String,
     /// caches tokens for AST roots
     pub tokens: Vec<Token>,
+    pub decls: Vec<Box<SyntaxNode>>
 }
