@@ -2,7 +2,7 @@ pub mod frontend;
 
 use std::{env::args, fs::read_to_string, process::ExitCode};
 
-use crate::frontend::{lexer, token::{Token, TokenKind}};
+use crate::frontend::{lexer, parser::Parser, token::{Token, TokenKind}};
 
 
 const RUNTIME_NAME: &str = "    ______                    \n   / ____/__  ______________  \n  / /_  / _ \\/ ___/ ___/ __ \\ \n / __/ /  __/ /  / /  / /_/ / \n/_/    \\___/_/  /_/   \\____/ \n";
@@ -47,7 +47,10 @@ fn main() -> ExitCode {
     tokenizer.map_special_lexical("for", TokenKind::KeywordFor);
     tokenizer.map_special_lexical("return", TokenKind::KeywordReturn);
     tokenizer.map_special_lexical("function", TokenKind::KeywordFunction);
+    tokenizer.map_special_lexical("new", TokenKind::KeywordNew);
+    tokenizer.map_special_lexical("this", TokenKind::KeywordThis);
     tokenizer.map_special_lexical("typeof", TokenKind::KeywordTypeOf);
+    tokenizer.map_special_lexical("void", TokenKind::KeywordVoid);
     tokenizer.map_special_lexical("delete", TokenKind::KeywordDelete);
     tokenizer.map_special_lexical("get", TokenKind::KeywordGet);
     tokenizer.map_special_lexical("set", TokenKind::KeywordSet);
@@ -67,7 +70,7 @@ fn main() -> ExitCode {
     tokenizer.map_special_lexical(">=", TokenKind::OperatorGreaterEquals);
     tokenizer.map_special_lexical("&&", TokenKind::OperatorAnd);
     tokenizer.map_special_lexical("||", TokenKind::OperatorOr);
-    tokenizer.map_special_lexical("=", TokenKind::OperatorSlash);
+    tokenizer.map_special_lexical("=", TokenKind::OperatorAssign);
     tokenizer.map_special_lexical("|", TokenKind::OperatorBitOr);
     tokenizer.map_special_lexical("&", TokenKind::OperatorBitAnd);
     tokenizer.map_special_lexical("<<", TokenKind::OperatorBShiftLeft);
@@ -75,6 +78,7 @@ fn main() -> ExitCode {
     tokenizer.map_special_lexical("undefined", TokenKind::LiteralUndefined);
     tokenizer.map_special_lexical("null", TokenKind::LiteralNull);
     tokenizer.map_special_lexical("NaN", TokenKind::LiteralNaN);
+    tokenizer.map_special_lexical("Infinity", TokenKind::LiteralInfinity);
     tokenizer.map_special_lexical("true", TokenKind::LiteralTrue);
     tokenizer.map_special_lexical("false", TokenKind::LiteralFalse);
 
@@ -83,6 +87,9 @@ fn main() -> ExitCode {
     for (pos, Token {begin, end, line, kind}) in all_tokens.iter().enumerate() {
         println!("Token #{pos}:\n\t[begin = {}, end = {}, line = {}, kind = {}", *begin, *end, *line, *kind);
     }
+
+    let mut parser = Parser::new(&all_tokens, &source_txt);
+    let _ = parser.parse_data();
 
     ExitCode::SUCCESS
 }
