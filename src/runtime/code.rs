@@ -1,0 +1,256 @@
+use std::fmt::Display;
+
+use crate::runtime::values::JSValue;
+use crate::runtime::objects::{DUD_POOL_ID, JS_OBJECT_COST, JS_STRING_COST, JSObjPtr, JSStrPtr, ItemPool};
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Opcode {
+    PushUndef,
+    PushNull,
+    PushBool,
+    PushNaN,
+    PushInf,
+    PushNegInf,
+    PushStr,
+    PushConst,
+    Dup1,
+    Dup2,
+    Swap,
+    Discard,
+    GetLocal,
+    SetLocal,
+    GetVar,
+    SetVar,
+    MakeObj,
+    GetOwnProp,
+    SetOwnProp,
+    GetProp,
+    SetProp,
+    DelProp,
+    GetProto,
+    SetProto,
+    ForceBool,
+    ForceNum,
+    NegBool,
+    NegNum,
+    Mod,
+    Mul,
+    Div,
+    Add,
+    Sub,
+    JumpEq,
+    JumpNe,
+    JumpLt,
+    JumpLte,
+    JumpGt,
+    JumpGte,
+    JumpIf,
+    JumpElse,
+    Jump,
+    Call,
+    CallCtor,
+    Ret,
+    // RET_CLOSURE,
+}
+
+pub const OPCODE_NAMES: &[&str] = &[
+    "PushUndef",
+    "PushNull",
+    "PushBool",
+    "PushNaN",
+    "PushInf",
+    "PushNegInf",
+    "PushStr",
+    "PushConst",
+    "Dup1",
+    "Dup2",
+    "Swap",
+    "Discard",  // ? Pops an expression's result and puts `undefined`
+    "GetLocal", // ? Uses constant offset via immediate arg
+    "SetLocal", // ? Uses constant offset via immediate arg
+    "GetVar",
+    "SetVar",
+    "MakeObj",
+    "GetOwnProp",
+    "SetOwnProp",   // ? Uses a "use-index" flag: If 1, the immediate i32 argument is used for setting an array index.
+    "GetProp",
+    "SetProp",
+    "DelProp",
+    "GetProto",
+    "SetProto", // ? Uses a "has-builtin" flag: If 1, an intrinsic prototype via ID is put. Otherwise, the stack's top-most JSValue is used.
+    "ForceBool",
+    "ForceNum",
+    "NegBool",
+    "NegNum",
+    "Mod",
+    "Mul",
+    "Div",
+    "Add",
+    "Sub",
+    "JumpEq",
+    "JumpNe",
+    "JumpLt",
+    "JumpLte",
+    "JumpGt",
+    "JumpGte",
+    "JumpIf",
+    "JumpElse",
+    "Jump",
+    "Call",
+    "CallCtor",
+    "Ret",
+];
+
+#[derive(Debug, Clone, Copy)]
+pub struct Instruction {
+    pub arg: i32,
+    pub flags: u8,
+    pub op: Opcode,
+}
+
+impl Display for Instruction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {arg, flags, op} = *self;
+
+        write!(f, "{}  flags({}), {}", OPCODE_NAMES[op as usize], flags, arg)
+    }
+}
+
+#[repr(u8)]
+#[derive(Debug, Default, Clone, Copy)]
+pub enum ICState {
+    #[default]
+    Unset,
+    Mono,
+    Poly,
+    Dead,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ICEntry {
+    /// Name of property that's interned in a string pool & used via ID.
+    pub key_id: usize,
+    /// Shape ID.
+    pub shape: i32,
+    /// Cached index into Object's property buffer, resolved via any Shape.
+    pub val_pos: usize,
+}
+
+impl Default for ICEntry {
+    fn default() -> Self {
+        Self {
+            key_id: 0,
+            shape: DUD_POOL_ID,
+            val_pos: 0
+        }
+    }
+}
+
+impl ICEntry {
+    pub fn is_set(&self) -> bool {
+        self.shape > DUD_POOL_ID
+    }
+}
+
+pub const IC_MISSES_TO_POLY: u32 = 64;
+
+pub const IC_MISSES_TO_DEAD: u32 = 640;
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct InlineCache {
+    pub entries: [ICEntry; 2],
+    pub misses: u32,
+    pub state: ICState,
+}
+
+impl InlineCache {
+    fn transition(misses: u32) -> ICState {
+        if misses < IC_MISSES_TO_POLY {
+            ICState::Mono
+        } else if misses < IC_MISSES_TO_DEAD {
+            ICState::Poly
+        } else {
+            ICState::Dead
+        }
+    }
+
+    pub fn find(&mut self, shape_id: i32, key_id: usize) -> Option<usize> {
+        let entry_0 = &self.entries[0];
+        let entry_1 = &self.entries[1];
+
+        match self.state {
+            ICState::Unset => {
+                self.state = ICState::Mono;
+                None
+            },
+            ICState::Mono => {
+                if entry_0.shape == shape_id && entry_0.key_id == key_id {
+                    Some(entry_0.val_pos)
+                } else {
+                    self.misses += 1;
+                    self.state = Self::transition(self.misses);
+                    None
+                }
+            },
+            ICState::Poly => {
+                if entry_0.shape == shape_id && entry_0.key_id == key_id {
+                    Some(entry_0.val_pos)
+                } else if entry_1.shape == shape_id && entry_1.key_id == key_id {
+                    Some(entry_1.val_pos)
+                } else {
+                    self.misses += 1;
+                    self.state = Self::transition(self.misses);
+                    None
+                }
+            },
+            ICState::Dead => None,
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct Chunk {
+    pub icaches: Vec<InlineCache>,
+    pub consts: Vec<JSValue>,
+    pub code: Vec<Instruction>,
+}
+
+pub struct Program {
+    /// GC-sweepable pool of objects
+    pub heap: ItemPool<JSObjPtr, JS_OBJECT_COST>,
+    /// Interned string pool
+    pub spool: ItemPool<JSStrPtr, JS_STRING_COST>,
+    /// Bytecode for top-level JS code
+    pub top_level: Chunk,
+    /// Saved script file-path
+    pub name: String,
+}
+
+fn dump_chunk(chunk: &Chunk, id_num: u16) {
+    let Chunk { consts, code , .. } = chunk;
+
+    println!("---- Chunk #{id_num} ----\n\n");
+
+    println!("--- CONSTS ---\n");
+
+    for (cid, constant) in consts.iter().enumerate() {
+        println!("\tC{cid} = {constant}");
+    }
+
+    println!("--- CODE ---\n");
+
+    for (ip, inst) in code.iter().enumerate() {
+        println!("\t{ip}: {inst}");
+    }
+
+    println!("--- END CHUNK ---\n");
+}
+
+pub fn dump_bytecode(program: &Program) {
+    let Program { top_level, name, .. } = program;
+
+    println!("---- PROGRAM '{name}' ----\n");
+
+    dump_chunk(top_level, 0);
+}
