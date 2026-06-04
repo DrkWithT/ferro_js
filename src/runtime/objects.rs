@@ -6,6 +6,8 @@ use crate::runtime::values::{JSValue};
 use crate::runtime::funcs::JSFunction;
 // todo: make string pool, object heap, metatable-like objects, and Function. Create an object Shape first.
 
+pub const DUD_SHAPE_ID: i32 = -1;
+
 #[derive(Debug)]
 pub struct Shape {
     /// Maps pre-calculated string hashes to property indices.
@@ -14,6 +16,49 @@ pub struct Shape {
     pub links: Vec<(usize, usize)>,
     pub parent: i32,
     pub id: i32,
+}
+
+impl Default for Shape {
+    /// Creates the empty Shape (layout structure) of freshly created & blank objects.
+    /// Example:
+    /// ```js
+    /// var x = {}; // x.[[shape]] = Shape::default()
+    /// ```
+    fn default() -> Self {
+        Self {
+            entries: HashMap::default(),
+            links: vec![],
+            parent: DUD_SHAPE_ID,
+            id: 0
+        }
+    }
+}
+
+impl Shape {
+    pub fn resolve_offset(&self, key_hash: usize) -> Option<usize> {
+        self.entries.get(&key_hash).copied()
+    }
+
+    pub fn resolve_subshape_id(&self, key_hash: usize) -> Option<usize> {
+        for (link_key, child_id) in &self.links {
+            if *link_key == key_hash {
+                return Some(*child_id);
+            }
+        }
+
+        None
+    }
+
+    pub fn add_transition(&mut self, key_hash: usize, child_shape_id: usize) {
+        if self.entries.contains_key(&key_hash) {
+            return;
+        }
+
+        let entry_offset_count = self.entries.len();
+
+        self.entries.insert(key_hash, entry_offset_count);
+        self.links.push((key_hash, child_shape_id));
+    }
 }
 
 #[repr(u8)]
