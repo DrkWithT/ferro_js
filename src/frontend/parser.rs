@@ -316,6 +316,7 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         let first_tk_pos = self.pos;
 
         let prefix_unary_op = match self.tokens[self.pos].kind {
+            TokenKind::KeywordNew => Operator::New,
             TokenKind::OperatorBang => Operator::NegBool,
             TokenKind::OperatorPlus => Operator::ForceNum,
             TokenKind::OperatorPlusPlus => Operator::Inc,
@@ -738,6 +739,22 @@ impl<'external_content_lt> Parser<'external_content_lt> {
     fn parse_return(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
         let first_tk_pos = self.pos;
         self.consume(); // ? skip 'return'
+
+        if self.tokens[self.pos].kind == TokenKind::Semicolon {
+            self.consume();
+
+            return Ok(Box::new(SyntaxNode {
+                data: SyntaxData::Return {
+                    out: Box::new(SyntaxNode {
+                        data: SyntaxData::Nil,
+                        first_tk: 0,
+                         end_tk: 0
+                    })
+                },
+                first_tk: first_tk_pos,
+                end_tk: first_tk_pos + 1
+            }));
+        }
 
         let out = self.parse_or()?;
 

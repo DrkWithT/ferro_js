@@ -35,6 +35,7 @@ pub enum Operator {
 
 #[repr(u8)]
 pub enum SyntaxId {
+    Nil,
     Literal,
     ObjectExpr,
     ArrayExpr,
@@ -59,6 +60,7 @@ pub enum SyntaxId {
 
 pub enum SyntaxData {
     /// Stores index into token buffer, saving memory
+    Nil,
     Literal(usize),
     ObjectExpr {
         props: Vec<(usize, Box<SyntaxNode>)>,
@@ -135,6 +137,7 @@ pub enum SyntaxData {
 impl SyntaxData {
     pub fn get_emitter_id(self) -> SyntaxId {
         match self {
+            Self::Nil => SyntaxId::Nil,
             Self::Literal(_) => SyntaxId::Literal,
             Self::ObjectExpr { .. } => SyntaxId::ObjectExpr,
             Self::ArrayExpr {..} => SyntaxId::ArrayExpr,
@@ -170,5 +173,6 @@ pub struct AST {
     pub txt: String,
     /// caches tokens for AST roots
     pub tokens: Vec<Token>,
-    pub decls: Vec<Box<SyntaxNode>>
+    pub decls: Vec<Box<SyntaxNode>>,
+    pub name: String,
 }
