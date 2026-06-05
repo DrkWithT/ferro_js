@@ -1,15 +1,12 @@
 // test filled vars
-var a = 1, b = 2, ok = 0;
+var a = 1, b, ok = 0;
 
-if (a === 1 || b === 2) {
-    ok++;
+if (a === 1) {
+    ok = ok + 1;
 }
 
-// test dud vars
-var c, d;
-
-if (c === undefined || d === undefined) {
-    ok++;
+if (b === undefined) {
+    ok = ok + 1;
 }
 
-return ok == 2;
+return ok === 2;

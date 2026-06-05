@@ -770,7 +770,7 @@ impl<'external_content_lt> Parser<'external_content_lt> {
 
     fn parse_expr_stmt(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
         let first_tk_pos = self.pos;
-        let lhs = self.parse_or()?;
+        let dest = self.parse_or()?;
 
         if self.tokens[self.pos].kind == TokenKind::OperatorAssign {
             self.consume();
@@ -784,7 +784,7 @@ impl<'external_content_lt> Parser<'external_content_lt> {
                 data: SyntaxData::ExprStmt {
                     inner: Box::new(SyntaxNode {
                         data: SyntaxData::Assign {
-                            dest: lhs, src
+                            dest, src
                         },
                         first_tk: first_tk_pos,
                         end_tk: self.pos,
@@ -798,7 +798,7 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         let semicolon_tk = &self.tokens[self.pos];
         CONSUME_OF!(self.consume(), ParseErr { culprit: semicolon_tk.clone(), msg: "Expected ';' ending this assignment.", line: semicolon_tk.line }, semicolon_tk.clone(), TokenKind::Semicolon);
 
-        Ok(lhs)
+        Ok(dest)
     }
 
     pub fn parse_data(&mut self) -> Option<Vec<Box<SyntaxNode>>> {
@@ -817,6 +817,10 @@ impl<'external_content_lt> Parser<'external_content_lt> {
             }
         }
 
-        Some(decls)
+        if self.errors > 0 {
+            None
+        } else {   
+            Some(decls)
+        }
     }
 }

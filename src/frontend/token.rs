@@ -11,7 +11,7 @@ macro_rules! MATCH_TKIND {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum TokenKind {
     Unknown,
     Spaces,
@@ -42,6 +42,8 @@ pub enum TokenKind {
     OperatorMinus,
     OperatorStrictEquals,
     OperatorStrictUnequals,
+    OperatorLooseEqual,
+    OperatorLooseUnequal,
     OperatorLesser,
     OperatorLesserEquals,
     OperatorGreater,
@@ -110,6 +112,8 @@ impl Display for TokenKind {
             Self::OperatorMinus => "-",
             Self::OperatorStrictEquals => "===",
             Self::OperatorStrictUnequals => "!==",
+            Self::OperatorLooseEqual => "==",
+            Self::OperatorLooseUnequal => "!=",
             Self::OperatorLesser => "<",
             Self::OperatorLesserEquals => "<=",
             Self::OperatorGreater => ">",

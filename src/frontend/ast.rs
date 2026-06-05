@@ -2,7 +2,7 @@
 use crate::frontend::token::Token;
 
 #[repr(u8)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Operator {
     Noop,
     NegBool,
@@ -22,6 +22,8 @@ pub enum Operator {
     Sub,
     StrictEqual,
     StrictUnequal,
+    LooseEqual,
+    LooseUnequal,
     Lesser,
     LessOrEqual,
     Greater,
@@ -34,6 +36,7 @@ pub enum Operator {
 }
 
 #[repr(u8)]
+#[derive(Debug)]
 pub enum SyntaxId {
     Nil,
     Literal,
@@ -58,6 +61,7 @@ pub enum SyntaxId {
     EmptyStmt,
 }
 
+#[derive(Debug)]
 pub enum SyntaxData {
     /// Stores index into token buffer, saving memory
     Nil,
@@ -162,10 +166,17 @@ impl SyntaxData {
     }
 }
 
+#[derive(Debug)]
 pub struct SyntaxNode {
     pub data: SyntaxData,
     pub first_tk: usize,
     pub end_tk: usize,
+}
+
+impl SyntaxNode {
+    pub fn is_empty_stmt(&self) -> bool {
+        matches!(self.data, SyntaxData::EmptyStmt {})
+    }
 }
 
 pub struct AST {    
