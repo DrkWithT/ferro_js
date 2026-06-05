@@ -1,8 +1,10 @@
 pub mod frontend;
+pub mod backend;
+pub mod runtime;
 
 use std::{env::args, fs::read_to_string, process::ExitCode};
 
-use crate::frontend::{lexer, parser::Parser, token::{Token, TokenKind}};
+use crate::{backend::emitter::Emitter, frontend::{ast::AST, lexer::Lexer, parser::Parser, token::TokenKind}, runtime::code::dump_bytecode};
 
 
 const RUNTIME_NAME: &str = "    ______                    \n   / ____/__  ______________  \n  / /_  / _ \\/ ___/ ___/ __ \\ \n / __/ /  __/ /  / /  / /_/ / \n/_/    \\___/_/  /_/   \\____/ \n";
@@ -39,7 +41,7 @@ fn main() -> ExitCode {
 
     let source_txt = source_txt.unwrap();
 
-    let mut tokenizer = lexer::Lexer::new(&source_txt);
+    let mut tokenizer = Lexer::new(&source_txt);
     tokenizer.map_special_lexical("var", TokenKind::KeywordVar);
     tokenizer.map_special_lexical("if", TokenKind::KeywordIf);
     tokenizer.map_special_lexical("else", TokenKind::KeywordElse);
@@ -84,12 +86,31 @@ fn main() -> ExitCode {
 
     let all_tokens = tokenizer.lex_all(&source_txt);
 
-    for (pos, Token {begin, end, line, kind}) in all_tokens.iter().enumerate() {
-        println!("Token #{pos}:\n\t[begin = {}, end = {}, line = {}, kind = {}", *begin, *end, *line, *kind);
+    let mut parser = Parser::new(&all_tokens, &source_txt);
+    let decls = parser.parse_data();
+
+    if decls.is_none() {
+        return ExitCode::FAILURE;
     }
 
-    let mut parser = Parser::new(&all_tokens, &source_txt);
-    let _ = parser.parse_data();
+    let ast = AST {
+        txt: source_txt,
+        tokens: all_tokens,
+        decls: decls.expect("Expected parsed JS decls at main.rs ~ line#97."),
+        name: source_fpath.to_owned(),
+    };
+
+    let mut bc_emitter = Emitter::new(64, 256);
+
+    let program = bc_emitter.emit_code(&ast);
+
+    if program.is_none() {
+        return ExitCode::FAILURE;
+    }
+
+    let program = program.expect("Expected fully compiled program at main.rs ~ line#111.");
+
+    dump_bytecode(&program);
 
     ExitCode::SUCCESS
 }
