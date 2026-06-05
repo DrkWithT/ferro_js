@@ -180,8 +180,8 @@ impl Display for JSValue {
         match self {
             Self::Undefined => write!(f, "JSValue(undefined)"),
             Self::Null => write!(f, "JSValue(null)"),
-            Self::Boolean(b) => write!(f, "JSValue({}", *b),
-            Self::Number(n) => write!(f, "JSValue({}", *n),
+            Self::Boolean(b) => write!(f, "JSValue({})", *b),
+            Self::Number(n) => write!(f, "JSValue({})", *n),
             Self::StringId(sid) => write!(f, "JSValue(sid-{})", *sid),
             Self::ObjectId(oid) => write!(f, "JSValue(oid-{})", *oid),
         }

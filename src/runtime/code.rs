@@ -17,6 +17,7 @@ pub enum Opcode {
     Dup1,
     Dup2,
     Swap,
+    PopN,
     Discard,
     GetLocal,
     SetLocal,
@@ -39,6 +40,16 @@ pub enum Opcode {
     Div,
     Add,
     Sub,
+    BtAnd,
+    BtOr,
+    StrictEq,
+    StrictNe,
+    LooseEq,
+    LooseNe,
+    Lt,
+    Lte,
+    Gt,
+    Gte,
     JumpEq,
     JumpNe,
     JumpLt,
@@ -66,6 +77,7 @@ pub const OPCODE_NAMES: &[&str] = &[
     "Dup1",
     "Dup2",
     "Swap",
+    "PopN",
     "Discard",  // ? Pops an expression's result and puts `undefined`
     "GetLocal", // ? Uses constant offset via immediate arg
     "SetLocal", // ? Uses constant offset via immediate arg
@@ -88,6 +100,16 @@ pub const OPCODE_NAMES: &[&str] = &[
     "Div",
     "Add",
     "Sub",
+    "BtAnd",
+    "BtOr",
+    "StrictEq",
+    "StrictNe",
+    "LooseEq",
+    "LooseNe",
+    "Lt",
+    "Lte",
+    "Gt",
+    "Gte",
     "JumpEq",
     "JumpNe",
     "JumpLt",
@@ -105,7 +127,7 @@ pub const OPCODE_NAMES: &[&str] = &[
 #[derive(Debug, Clone, Copy)]
 pub struct Instruction {
     pub arg: i32,
-    pub flags: u8,
+    pub flags: u16,
     pub op: Opcode,
 }
 
