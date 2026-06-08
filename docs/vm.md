@@ -22,9 +22,11 @@ TEMP STACK, pre-call:
 -----------------
 Begin call:
 1. Load array-like object viewing N temp args to Environment.arguments. A new environment is created if:
-   - Case 1: Functions are checked at compile time for "foreign" captured names... If there's none, the function is marked "plain", not requiring an environment object itself (but a passed closure argument will!)
+   - Case 1: Global scope / code is first entered.
    - Case 2: Constructor calls make a new environment object for `this`.
-   - Case 3: Bind `this` to global environment IFF the call is regular.
+   - Case 3: If a function captures foreign names or has captured names.
+      - Functions are checked at compile time for "foreign" captured names... If there's none, the function is marked "plain", not requiring an environment object itself (but a passed closure argument will!)
+      - Bind `this` to global environment IFF the call is regular.
 -------...-------
 End call:
 1. Pop environment IFF there's no function returned, leaving a completion record with the return value. Otherwise, a closure is returned in the record.

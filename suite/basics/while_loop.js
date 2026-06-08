@@ -1,11 +1,8 @@
-var i = 10, j = 0;
+var i = 10, x = 0;
 
-while (i > 0) {
-    if (i % 2 === 0) {
-        j = j + i;
-    }
-
-    i--;
+while (i !== 0) {
+    x = x + i;
+    i = i - 1;
 }
 
-return j === 30;
+return x === 55;
