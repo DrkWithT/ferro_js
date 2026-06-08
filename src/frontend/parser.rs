@@ -642,10 +642,26 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         }))
     }
 
-    #[allow(unused)]
     fn parse_while(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
-        // todo: implement!
-        Err(ParseErr {culprit: Token::eof(0), msg: "Testing!", line: 0})
+        let first_tk_pos = self.pos;
+
+        self.consume(); // ? skip 'while'
+
+        let lparen_tk = &self.tokens[self.pos];
+        CONSUME_OF!(self.consume(), ParseErr { culprit: lparen_tk.clone(), msg: "Expected '(' before while-loop condition here.", line: lparen_tk.line }, lparen_tk.clone(), TokenKind::LeftParen);
+
+        let cond_expr = self.parse_or()?;
+
+        let rparen_tk = &self.tokens[self.pos];
+        CONSUME_OF!(self.consume(), ParseErr { culprit: rparen_tk.clone(), msg: "Expected ')' after while-loop condition here.", line: rparen_tk.line }, rparen_tk.clone(), TokenKind::RightParen);
+
+        let loop_body_stmt = self.parse_stmt()?;
+
+        Ok(Box::new(SyntaxNode {
+            data: SyntaxData::While { cond: cond_expr, body: loop_body_stmt },
+            first_tk: first_tk_pos,
+            end_tk: self.pos
+        }))
     }
 
     #[allow(unused)]
@@ -810,7 +826,7 @@ impl<'external_content_lt> Parser<'external_content_lt> {
             if parse_result.is_ok() {
                 decls.push(parse_result.ok().expect("Expected parsed stmt in Parser::parse_data()!"));
             } else  {
-                let parse_error = parse_result.err().expect("Expected parser error in Parser::parse_data()!");
+                let parse_error = parse_result.expect_err("Expected parser error in Parser::parse_data()!");
                 self.errors += 1;
                 eprintln!("Parse error #{} [source:{}]:\n{}\n\n", self.errors, parse_error.line, parse_error.msg);
                 self.recover();

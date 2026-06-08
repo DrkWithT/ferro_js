@@ -340,14 +340,16 @@ impl Emitter {
                 Opcode::PushStr,
                 true,
             )
-        } else if self.in_locator && !self.in_access {
-            // ? Skip emission of LHS for assignment exprs to prevent a messy stack situation.
+        } else if self.in_locator && !self.in_access && !self.is_func_simple {
+            // ? Skip emission of LHS for assignment exprs to prevent a messy stack situation... Just put its environment object key.
             (
-                None,
-                Opcode::Ret,
-                false
+                self.resolve_global_string(lexeme, true).or_else(|| {
+                    self.record_global_string(lexeme, true)
+                }),
+                Opcode::PushStr,
+                true,
             )
-        } else { // ! add missing case for "in_locator" for simple names
+        } else { // ! add missing case for "in_locator" for simple, stack-offset local names...
             (
                 None,
                 Opcode::Ret,
@@ -628,6 +630,9 @@ impl Emitter {
             return true;
         }
 
+        // TODO: implement logical && , || generation.
+        // if !self.emit_logical_juncts(src_text, l, r, ast) { return false; }
+
         struct DirOp {
             pub is_ltr: bool,
             pub opcode: Opcode,
@@ -874,15 +879,15 @@ impl Emitter {
 
         if self.in_simplicity_check {
             for (_, var_init_expr_2) in vars.iter() {
-                let _ = self.emit_node(src_text, var_init_expr_2.as_ref().expect("Expected variable node in emitter.rs ~ line#792.").as_ref(), ast);
+                let _ = self.emit_node(src_text, var_init_expr_2.as_ref().expect("Expected variable node in emitter.rs ~ line#880.").as_ref(), ast);
             }
 
-            return true;   
+            return true;
         }
 
         if self.is_func_simple {
             for (var_name_tk_pos_2, var_init_expr_2) in vars.iter() {
-                if !self.emit_node(src_text, var_init_expr_2.as_ref().expect("Expected variable node in emitter.rs ~ line#792.").as_ref(), ast) {
+                if !self.emit_node(src_text, var_init_expr_2.as_ref().expect("Expected variable node in emitter.rs ~ line#888.").as_ref(), ast) {
                     return false;
                 }
 
@@ -898,7 +903,7 @@ impl Emitter {
 
                 let local_str_id = self.resolve_global_string(local_key_name, true).or_else(|| {
                     self.record_global_string(local_key_name, true)
-                }).expect("Expected local name info created at emitter.rs ~ line#808.");
+                }).expect("Expected local name info created at emitter.rs ~ line#904.");
 
                 self.emit_unary_inst(Opcode::PushStr, local_str_id.id, 0);
 
@@ -911,7 +916,8 @@ impl Emitter {
                     self.emit_nonary_inst(Opcode::PushUndef, 0);
                 }
 
-                self.emit_nonary_inst(Opcode::SetVar, 0);
+                let var_init_ic_ip = self.emit_nonary_inst(Opcode::SetVar, 0);
+                self.put_ic_of_inst(var_init_ic_ip);
             }
         }
 
@@ -948,21 +954,47 @@ impl Emitter {
         }
 
         let skip_f_block_pos = self.emit_unary_inst(Opcode::Jump, 0, 0);
-        self.chunks.last_mut().expect("Expected available chunk for emitting to in else clause; emitter.rs ~ line#856.").code[skip_t_block_pos as usize].arg = skip_f_block_pos + 1 - skip_t_block_pos;
+        self.chunks.last_mut().expect("Expected available chunk for emitting to in else clause; emitter.rs ~ line#955.").code[skip_t_block_pos as usize].arg = skip_f_block_pos + 1 - skip_t_block_pos;
 
         if !self.emit_node(src_text, f_block, ast) {
             return false;
         }
 
-        let end_if_else_pos = self.chunks.last().expect("Expected available chunk at emitter.rs ~ line#862.").code.len() as i32;
-        self.chunks.last_mut().expect("Expected available chunk for emitting to after if-else-stmt; emitter.rs ~ line#863.").code[skip_f_block_pos as usize].arg = end_if_else_pos - skip_f_block_pos;
+        let end_if_else_pos = self.chunks.last().expect("Expected available chunk at emitter.rs ~ line#961.").code.len() as i32;
+        self.chunks.last_mut().expect("Expected available chunk for emitting to after if-else-stmt; emitter.rs ~ line#962.").code[skip_f_block_pos as usize].arg = end_if_else_pos - skip_f_block_pos;
 
         true
     }
 
     #[allow(unused)]
     fn emit_while(&mut self, src_text: &str, node: &SyntaxData, ast: &AST) -> bool {
-        false // todo: implement LATER!
+        let SyntaxData::While { cond, body } = node else { return false; };
+
+        if self.in_simplicity_check || self.in_prepass {
+            let _ = self.emit_node(src_text, body, ast);
+            return true;
+        }
+
+        let loop_check_ip = self.chunks.last().expect("Expected available chunk at emitter.rs ~ line#971.").code.len() as i32;
+        if !self.emit_node(src_text, cond, ast) {
+            return false;
+        }
+
+        let loop_exit_jump_ip = self.chunks.last().expect("Expected available chunk at emitter.rs ~ line#976.").code.len() as i32;
+        self.emit_unary_inst(Opcode::JumpElse, 0, 0);
+
+        if !self.emit_node(src_text, body, ast) {
+            return false;
+        }
+
+        let loop_repeat_jump_ip = self.chunks.last().expect("Expected available chunk at emitter.rs ~ line#983.").code.len() as i32;
+        self.emit_unary_inst(Opcode::Jump, loop_check_ip - loop_repeat_jump_ip, 0);
+
+        let loop_end_ip = loop_repeat_jump_ip + 1;
+        self.emit_unary_inst(Opcode::PopN, 0, 1);
+        self.chunks.last_mut().expect("Expected available chunk for emitting to after if-else-stmt; emitter.rs ~ line#987.").code[loop_exit_jump_ip as usize].arg = loop_end_ip - loop_exit_jump_ip;
+
+        true
     }
 
     #[allow(unused)]
