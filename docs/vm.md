@@ -4,10 +4,11 @@
  - Stack-based value passing
     - Temporary stack
     - Environments stack / chain
-    - Completion record stack
- - TCO dispatch with hot data passed directly to opcode handlers
- - In-place value ops / super-instructions?
- - Mark & sweep GC
+    - Completion record stack??
+ - Match opcode & loop dispatch for standard Rust support (WORKING)
+ - Inline Caches (WIP, experimental)
+ - In-place value ops / super-instructions (WIP)
+ - Mark & sweep GC (PLANNED)
 
 #### Call Layout on Stack:
 ```

@@ -9,4 +9,4 @@ if (b === undefined) {
     ok = ok + 1;
 }
 
-return ok === 2;
+ok === 2;

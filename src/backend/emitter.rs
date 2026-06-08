@@ -1099,6 +1099,8 @@ impl Emitter {
             }
         }
 
+        self.emit_nonary_inst(Opcode::Ret, 0);
+
         Some(Program {
             heap: std::mem::take(&mut self.heap),
             spool: std::mem::take(&mut self.spool),
