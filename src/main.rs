@@ -4,7 +4,7 @@ pub mod runtime;
 
 use std::{env::args, fs::read_to_string, process::ExitCode};
 
-use crate::{backend::emitter::Emitter, frontend::{ast::AST, lexer::Lexer, parser::Parser, token::TokenKind}, runtime::code::dump_bytecode};
+use crate::{backend::emitter::Emitter, frontend::{ast::AST, lexer::Lexer, parser::Parser, token::TokenKind}, runtime::{code::dump_bytecode, ctx::{JSContext, EvalStatus}, objects::DEFAULT_SHAPE_POPULATION, vm::{DEFAULT_JS_RECUR_LIMIT, DEFAULT_JS_STACK_SIZE, run_vm}}};
 
 
 const RUNTIME_NAME: &str = "    ______                    \n   / ____/__  ______________  \n  / /_  / _ \\/ ___/ ___/ __ \\ \n / __/ /  __/ /  / /  / /_/ / \n/_/    \\___/_/  /_/   \\____/ \n";
@@ -13,11 +13,13 @@ fn main() -> ExitCode {
     let mut file_name: Option<String> = None;
     let mut option_show_version = false;
     let mut option_show_help = false;
+    let mut option_allow_bc_dump = false;
 
     for arg in args().skip(1) {
         match arg.as_str() {
             "-v" => { option_show_version = true; },
             "-h" => { option_show_help = true; },
+            "-d" => { option_allow_bc_dump = true; },
             _ => file_name = Some(arg)
         }
     }
@@ -110,7 +112,22 @@ fn main() -> ExitCode {
 
     let program = program.expect("Expected fully compiled program at main.rs ~ line#111.");
 
-    dump_bytecode(&program);
+    if option_allow_bc_dump {
+        dump_bytecode(&program);
+        return ExitCode::SUCCESS;
+    }
 
-    ExitCode::SUCCESS
+    let mut vm_state = JSContext::new(DEFAULT_SHAPE_POPULATION, DEFAULT_JS_STACK_SIZE, DEFAULT_JS_RECUR_LIMIT, program);
+
+    let vm_status = run_vm(&mut vm_state);
+
+    println!("{}", vm_state.stack[0]);
+
+    println!("Finish status: {vm_status}");
+
+    if vm_status == EvalStatus::Ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }
