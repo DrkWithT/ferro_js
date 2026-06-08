@@ -181,7 +181,7 @@ unsafe fn op_get_var(context: &mut JSContext, stack: *mut JSValue) {
             return;
         }
 
-        println!("NOTE: IP = {}", context.ip.read());
+        // println!("NOTE: IP = {}", context.ip.read());
 
         if let JSObjectWrap::Exotic(env_obj) = env_ref {
             let env_shape = env_obj.shape;
@@ -240,7 +240,7 @@ unsafe fn op_set_var(context: &mut JSContext, stack: *mut JSValue) {
             return;
         }
 
-        println!("NOTE: IP = {}", context.ip.read());
+        // println!("NOTE: IP = {}", context.ip.read());
 
         if let JSObjectWrap::Exotic(env_obj) = context.frames.last_mut().expect("Expected JS lexical environment in vm.rs: op_set_var").this_p.as_mut().unwrap() {
             let old_env_shape = env_obj.shape;
@@ -249,7 +249,7 @@ unsafe fn op_set_var(context: &mut JSContext, stack: *mut JSValue) {
                 if let Some(prop_offset) = ic_ref.find(old_env_shape, key_str_id as usize) {
                     match &mut env_obj.props[prop_offset].body {
                         PropBody::Data(value) => {
-                            println!("NOTE: prop-{prop_offset}({}) = {}", *value, *src_value);
+                            // println!("NOTE: prop-{prop_offset}({}) = {}", *value, *src_value);
                             *value = *src_value
                         },
                         PropBody::Accessor((_, _)) => {
@@ -288,7 +288,7 @@ unsafe fn op_set_var(context: &mut JSContext, stack: *mut JSValue) {
 
                     match &mut env_obj.props[prop_pos].body {
                         PropBody::Data(value) => {
-                            println!("NOTE: prop-{prop_pos}({}) = {}", *value, *src_value);
+                            // println!("NOTE: prop-{prop_pos}({}) = {}", *value, *src_value);
                             *value = *src_value;
                         },
                         _ => {

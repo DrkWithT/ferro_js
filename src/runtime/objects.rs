@@ -51,15 +51,17 @@ impl Shape {
         None
     }
 
-    pub fn add_transition(&mut self, key_hash: usize, child_shape_id: i32) {
-        if self.entries.contains_key(&key_hash) {
-            return;
+    /// Returns an existing shape for a new transition (additional property name to shape ID pair) ONLY IF the links has it.
+    pub fn add_transition(&mut self, key_hash: usize, child_shape_id: i32) -> i32 {
+        if let Some((_, pre_link_child_shape_id)) = self.links.iter().find(|item| {
+            item.0 == key_hash
+        }) {
+            return *pre_link_child_shape_id;
         }
 
-        let entry_offset_count = self.entries.len();
-
-        self.entries.insert(key_hash, entry_offset_count);
         self.links.push((key_hash, child_shape_id));
+
+        child_shape_id
     }
 
     pub fn derive_child(&mut self, added_key: usize, child_shape_id: i32) -> Self {
