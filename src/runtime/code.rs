@@ -12,6 +12,7 @@ pub enum Opcode {
     PushNaN,
     PushInf,
     PushNegInf,
+    PushThisRef,
     PushStr,
     PushConst,
     Dup1,
@@ -50,12 +51,6 @@ pub enum Opcode {
     Lte,
     Gt,
     Gte,
-    JumpEq,
-    JumpNe,
-    JumpLt,
-    JumpLte,
-    JumpGt,
-    JumpGte,
     JumpIf,
     JumpElse,
     Jump,
@@ -72,6 +67,7 @@ pub const OPCODE_NAMES: &[&str] = &[
     "PushNaN",
     "PushInf",
     "PushNegInf",
+    "PushThisRef",  // ? Pushes the reference of `this`, possibly the global object or a constructor's environment object.
     "PushStr",
     "PushConst",
     "Dup1",
@@ -110,12 +106,6 @@ pub const OPCODE_NAMES: &[&str] = &[
     "Lte",
     "Gt",
     "Gte",
-    "JumpEq",
-    "JumpNe",
-    "JumpLt",
-    "JumpLte",
-    "JumpGt",
-    "JumpGte",
     "JumpIf",
     "JumpElse",
     "Jump",
@@ -175,9 +165,9 @@ impl ICEntry {
     }
 }
 
-pub const IC_MISSES_TO_POLY: u32 = 64;
+pub const IC_MISSES_TO_POLY: u32 = 1024;
 
-pub const IC_MISSES_TO_DEAD: u32 = 640;
+pub const IC_MISSES_TO_DEAD: u32 = 16384;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct InlineCache {
@@ -197,19 +187,49 @@ impl InlineCache {
         }
     }
 
+    pub fn update(&mut self, shape_id: i32, key_id: usize, val_pos: usize) {
+        match self.state {
+            ICState::Mono => {
+                println!("IC [mono] += [shape => {shape_id}, key_id => {key_id}, prop_pos => {val_pos}]");
+                self.entries[0] = ICEntry { key_id, shape: shape_id, val_pos };
+            },
+            ICState::Poly => {
+                if !self.entries[0].is_set() {
+                    println!("IC [poly] += [shape => {shape_id}, key_id => {key_id}, prop_pos => {val_pos}]");
+                    self.entries[0] = ICEntry { key_id, shape: shape_id, val_pos };
+                } else if !self.entries[1].is_set() {
+                    println!("IC [poly] += [shape => {shape_id}, key_id => {key_id}, prop_pos => {val_pos}]");
+                    self.entries[1] = ICEntry { key_id, shape: shape_id, val_pos };
+                } else {
+                    let replace_pos = key_id & 1; // heuristic: if the key ID is even, replace 0th. Replace 1st otherwise.
+
+                    println!("IC [poly] ~= [shape => {shape_id}, key_id => {key_id}, prop_pos => {val_pos}]");
+                    self.entries[replace_pos] = ICEntry { key_id, shape: shape_id, val_pos };
+                }
+            },
+            _ => {
+                println!("IC [dead] => it's cooked");
+            }
+        }
+    }
+
     pub fn find(&mut self, shape_id: i32, key_id: usize) -> Option<usize> {
         let entry_0 = &self.entries[0];
         let entry_1 = &self.entries[1];
 
         match self.state {
             ICState::Unset => {
+                println!("IC [unset] --> IC[mono]");
                 self.state = ICState::Mono;
                 None
             },
             ICState::Mono => {
+                println!("IC [mono]");
                 if entry_0.shape == shape_id && entry_0.key_id == key_id {
+                    println!("IC [mono]: HIT");
                     Some(entry_0.val_pos)
                 } else {
+                    println!("IC [mono]: MISS");
                     self.misses += 1;
                     self.state = Self::transition(self.misses);
                     None
@@ -217,16 +237,22 @@ impl InlineCache {
             },
             ICState::Poly => {
                 if entry_0.shape == shape_id && entry_0.key_id == key_id {
+                    println!("IC [poly]: HIT ENTRY 0");
                     Some(entry_0.val_pos)
                 } else if entry_1.shape == shape_id && entry_1.key_id == key_id {
+                    println!("IC [poly]: HIT ENTRY 1");
                     Some(entry_1.val_pos)
                 } else {
+                    println!("IC [poly]: MISS");
                     self.misses += 1;
                     self.state = Self::transition(self.misses);
                     None
                 }
             },
-            ICState::Dead => None,
+            ICState::Dead => {
+                println!("IC[dead]: DEAD");
+                None
+            },
         }
     }
 }

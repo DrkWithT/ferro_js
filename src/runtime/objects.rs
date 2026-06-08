@@ -6,15 +6,17 @@ use crate::runtime::values::{JSValue};
 use crate::runtime::funcs::JSFunction;
 // todo: make string pool, object heap, metatable-like objects, and Function. Create an object Shape first.
 
-pub const DUD_SHAPE_ID: i32 = -1;
+pub const DUD_SHAPE_ID: i32 = 0;
+pub const DEFAULT_SHAPE_POPULATION: usize = 4096;
 
 #[derive(Debug)]
 pub struct Shape {
     /// Maps pre-calculated string hashes to property indices.
     pub entries: HashMap<usize, usize>,
     /// Maps pre-calculated string hashes of new properties to child Shapes.
-    pub links: Vec<(usize, usize)>,
+    pub links: Vec<(usize, i32)>,
     pub parent: i32,
+    /// NOTE: **MUST** be updated after this `Shape` is cloned from its parent.
     pub id: i32,
 }
 
@@ -39,7 +41,7 @@ impl Shape {
         self.entries.get(&key_hash).copied()
     }
 
-    pub fn resolve_subshape_id(&self, key_hash: usize) -> Option<usize> {
+    pub fn resolve_subshape_id(&self, key_hash: usize) -> Option<i32> {
         for (link_key, child_id) in &self.links {
             if *link_key == key_hash {
                 return Some(*child_id);
@@ -49,7 +51,7 @@ impl Shape {
         None
     }
 
-    pub fn add_transition(&mut self, key_hash: usize, child_shape_id: usize) {
+    pub fn add_transition(&mut self, key_hash: usize, child_shape_id: i32) {
         if self.entries.contains_key(&key_hash) {
             return;
         }
@@ -58,6 +60,23 @@ impl Shape {
 
         self.entries.insert(key_hash, entry_offset_count);
         self.links.push((key_hash, child_shape_id));
+    }
+
+    pub fn derive_child(&mut self, added_key: usize, child_shape_id: i32) -> Self {
+        self.links.push((added_key, child_shape_id));
+
+        Self {
+            entries: {
+                let mut old_entries = self.entries.clone();
+
+                old_entries.insert(added_key, old_entries.len());
+
+                old_entries
+            },
+            links: vec![],
+            parent: self.id,
+            id: child_shape_id
+        }
     }
 }
 
@@ -96,6 +115,24 @@ pub enum JSObjectWrap {
     /// Stores a typical, key-value object.
     Exotic(ExoticObject),
     Func(JSFunction),
+}
+
+impl JSObjectWrap {
+    pub fn as_object(&mut self) -> Option<&mut ExoticObject> {
+        if let Self::Exotic(object_ref) = self {
+            return Some(object_ref)
+        }
+
+        None
+    }
+
+    pub fn as_func(&mut self) -> Option<&mut JSFunction> {
+        if let Self::Func(func_ref) = self {
+            return Some(func_ref);
+        }
+
+        None
+    }
 }
 
 
@@ -284,6 +321,10 @@ pub struct ShapePool {
 impl ShapePool {
     pub fn fetch(&self, sid: i32) -> Option<&Shape> {
         self.shapes.get(sid as usize)
+    }
+
+    pub fn fetch_mut(&mut self, sid: i32) -> Option<&mut Shape> {
+        self.shapes.get_mut(sid as usize)
     }
 
     pub fn store(&mut self, s: Shape) -> Option<i32> {
