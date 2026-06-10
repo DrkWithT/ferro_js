@@ -1,0 +1,36 @@
+### TO DO's:
+
+#### v0.1.0
+ - Support more JS operators, including prefix, postfix, bitwise, and logical ops.
+    - Prefix and postfix:
+        - prefix first for `++` and `--`
+        - postfix after prefix versions
+    - Bitwise:
+        - `~` and `!` --> unary rule
+        - `&`, `|`, `^` --> rule between equality and logical
+    - Logical operators `&&`, `||`, `!`
+        - `&&` or `||` will short circuit evaluate LHS and/or RHS, possibly not boolean
+    - Add loose equality:
+        - IF same types:
+            - undefined or null on either side => true
+            - boolean => direct comparison
+            - numbers => direct comparison
+            - string => direct comparison
+            - object => check reference equality?
+        - ELSE:
+            - boolean on either side vs. number => coerce any boolean to 0 or 1 and then compare
+            - string on either side vs. number => coerce any string to number and compare
+            - object on either side vs. number or string => coerce objects to primitive number or string and compare
+            - ... => false
+    - Add `void`, `typeof`, `delete`
+ - Support compound assignment ops: `*=`, `/=`, `+=`, `-=`
+ - Support more control flow: `while`, C-style `for`, `switch`
+ - Support special impl attributes in global object properties: `IsDecl` must be checked on `delete`.
+ - Support property semantics: data vs. accessor, writable + configurable + enumerable.
+ - Support global this.
+ - Support simple functions, including their call-this semantics.
+ - Support native display(...args) function.
+ - Support array (native object with array prototype)
+ - Support array literals.
+ - Support array prototype methods except `sort` and locales.
+ - Support built-in `Date` object with prototype.
