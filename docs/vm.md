@@ -52,13 +52,17 @@ End call:
  - MAKE_OBJ
  - GET_OWN_PROP
  - SET_OWN_PROP
- - GET_PROP
- - SET_PROP
- - DEL_PROP
- - GET_PROTO
- - SET_PROTO
+ - GET_PROP    NOTE: If generic flag (aka [] access) is on, do so.
+ - SET_PROP    NOTE: If generic flag (aka [] access) is on, do so.
+ - DEL_PROP    NOTE: ignore indexed items for now!
+ - GET_PROTO   NOTE: If hidden flag is on: get `[[Prototype]]`
+ - SET_PROTO   NOTE: If hidden flag (`0b0001`) is on: set `[[Prototype]]`. If hidden flag 2 (`0b0010`) is on: use a built-in prototype Value, but use the stack top otherwise.
  - TO_BOOLEAN
  - TO_NUMBER
+ - INC_LOCAL N    NOTE: increments top stack value at BP + N -- _Prefix gives newValue BUT postfix gives the oldValue!_
+ - DEC_LOCAL N    NOTE: decrements top stack value at BP + N
+ - INC_PROP G     NOTE: requires a key and the object below on the stack.
+ - DEC_PROP G     NOTE: requires a key and the object below on the stack.
  - NEGATE_BOOL
  - NEGATE_NUM
  - MOD
@@ -66,12 +70,14 @@ End call:
  - DIV
  - ADD
  - SUB
- - JUMP_EQ
- - JUMP_NE
- - JUMP_LT
- - JUMP_LTE
- - JUMP_GT
- - JUMP_GTE
+ - STRICT_EQ
+ - STRICT_NE
+ - LOOSE_EQ
+ - LOOSE_NE
+ - LT
+ - LTE
+ - GT
+ - GTE
  - JUMP_IF
  - JUMP_ELSE
  - JUMP

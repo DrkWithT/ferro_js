@@ -584,6 +584,10 @@ pub fn run_vm(context: &mut JSContext) -> EvalStatus {
                 Opcode::Call => op_call(context, stack_base_ptr),
                 Opcode::CallCtor => op_call_ctor(context, stack_base_ptr),
                 Opcode::Ret => op_ret(context, stack_base_ptr),
+                _ => {
+                    eprintln!("Invalid / unsupported opcode {} !", context.ip.as_ref_unchecked().op as u16);
+                    context.status = EvalStatus::BadOp;
+                }
             };
         }
     }
