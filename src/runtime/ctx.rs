@@ -44,8 +44,8 @@ pub struct CallFrame {
     ///  - 1: Holds a new object environment upon ctor calls.
     ///  - 2: Holds a custom `this` Value from `Function.call()`.
     ///  - 3: If `use strict` applies, do not coerce `this` to globalThis. Otherwise, do so.
-    pub this_p: *mut JSObjectWrap,
-    pub callee_p: *mut JSObjectWrap,
+    pub this_p: *mut JSObjectWrap, // ! FIXME: use JSValue instead to simplify property accesses later with object-id values + key-value...
+    pub callee_p: *mut JSObjectWrap, // ! FIXME: use JSValue
     pub caller_rip: *const Instruction,
     pub caller_cvp: *const JSValue,
     pub caller_bp: i32,
