@@ -1,3 +1,4 @@
+use core::num::ParseIntError;
 use std::cell::RefCell;
 use std::fmt::Display;
 use std::rc::Rc;
@@ -6,14 +7,20 @@ use crate::runtime::values::JSValue;
 use crate::runtime::code::{Instruction, InlineCache, Chunk, Program};
 use crate::runtime::objects::{DUD_SHAPE_ID, ExoticObject, ItemPool, JS_OBJECT_COST, JS_STRING_COST, JSObjPtr, JSObjectWrap, JSStrPtr, Shape, ShapePool};
 
-
+/// ### ABOUT
+/// Indicates status of VM execution. See each enum member for a quick description.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EvalStatus {
+    /// Execution is WIP
     Pending,
+    /// Finished with no errors (excluding logical errors)
     Ok,
+    /// Finished with unsupported / failed opcode
     BadOp,
+    /// Finished with bad reference / property access (JS XXXError comes later)
     BadAccess,
+    /// Finished with memory error i.e heap failed to allocate an object
     BadAlloc,
 }
 
@@ -29,6 +36,8 @@ impl Display for EvalStatus {
     }
 }
 
+/// ## ABOUT
+/// Tracks callee-caller state for the VM.
 #[derive(Debug)]
 pub struct CallFrame {
     /// Contains `FuncEnvironment.[[This]]` and follows these cases:
@@ -56,6 +65,11 @@ impl Default for CallFrame {
     }
 }
 
+/// ## ABOUT
+/// Stores all state of the interpreter, primarily for the VM's execution and memory management.
+/// ### TODOs
+/// 1. Add a mark-and-sweep GC.
+/// 2. Improve IC & Shape system to require less indirection and spaghetti code.
 pub struct JSContext {
     /// Holds and manages JS object memory.
     pub heap: ItemPool<JSObjPtr, JS_OBJECT_COST>,
@@ -78,6 +92,8 @@ pub struct JSContext {
 }
 
 impl JSContext {
+    /// ### ABOUT
+    /// Constructs a new JSContext for the interpreter's VM.
     pub fn new(shape_population: usize, stack_sizing: usize, calls_max: u16, mut program: Program) -> Self {
         let start_ip = program.top_level.code.as_ptr();
         let start_icp = program.top_level.icaches.as_mut_ptr();
@@ -96,6 +112,8 @@ impl JSContext {
             ExoticObject {
                 props: vec![],
                 items: vec![],
+                in_proto: JSValue::Undefined,
+                out_proto: JSValue::Undefined,
                 shape: DUD_SHAPE_ID
             }
         ))))).unwrap();
@@ -135,6 +153,78 @@ impl JSContext {
             cd: 1,
             cm: calls_max,
             status: EvalStatus::Pending
+        }
+    }
+
+    /// ### ABOUT
+    /// Implements most of the important baseline conversion of JS values to JS numbers (double-precision floats). Objects to numbers are unsupported for now.
+    pub fn jsvalue_to_number(&self, v: &JSValue) -> f64 {
+        match v {
+            JSValue::Undefined => f64::NAN,
+            JSValue::Null => 0.0,
+            JSValue::Boolean(b) => if *b {1.0} else {0.0},
+            JSValue::Number(x) => *x,
+            JSValue::StringId(sid) => {
+                let text = if let Some(str_cell) = self.spool.get_item(*sid).as_deref() {
+                    unsafe {str_cell.as_ptr().as_ref().expect("Expected valid string pool ID at ctx.rs: jsvalue_to_number").as_str()}
+                } else {
+                    "NAN"
+                }.trim();
+
+                let is_signed = text.chars().nth(0).unwrap() == '-';
+
+                let text = if is_signed { text.strip_prefix("-").unwrap() } else { text };
+
+                // ! FIXME: implement exponentials later.
+                (if is_signed {-1.0} else {1.0}) * (if text.starts_with("0x") {
+                    i32::from_str_radix(text, 16u32)
+                        .map(f64::from)
+                        .or(Ok::<f64, ParseIntError>(f64::NAN))
+                        .expect("Expected converted f64 (HEX number) at ctx.rs: jsvalue_to_number")
+                } else if text.starts_with("0b") {
+                    i32::from_str_radix(text, 2u32)
+                        .map(f64::from)
+                        .or(Ok::<f64, ParseIntError>(f64::NAN))
+                        .expect("Expected converted f64 (BIN number) at ctx.rs: jsvalue_to_number")
+                } else if text.starts_with("0") && text.len() > 1 {
+                    i32::from_str_radix(text, 8u32)
+                        .map(f64::from)
+                        .or(Ok::<f64, ParseIntError>(f64::NAN))
+                        .expect("Expected converted f64 (OCT number) at ctx.rs: jsvalue_to_number")
+                } else if text.starts_with("0") && text.len() == 1 {
+                    0.0
+                } else {
+                    str::parse::<f64>(text).expect("Expected valid f64 literal at ctx.rs: jsvalue_to_number")
+                })
+            },
+            // ! FIXME: implement logic that tries object.valueOf(), see ES6: 7.1.3
+            JSValue::ObjectId(_) => f64::NAN
+        }
+    }
+
+    /// ### ABOUT
+    /// Implements basics of ES6: 7.1.5
+    pub fn jsvalue_to_i32(&self, v: &JSValue) -> i32 {
+        let raw_num = self.jsvalue_to_number(v);
+
+        if raw_num.is_nan() {
+            0i32
+        } else if raw_num == 0.0 || raw_num.is_infinite() {
+            raw_num as i32
+        } else {
+            f64::floor(raw_num) as i32
+        }
+    }
+
+    /// ### ABOUT
+    /// Implements basics of ES6: 7.1.6
+    pub fn jsvalue_to_u32(&self, v: &JSValue) -> u32 {
+        let raw_num = self.jsvalue_to_number(v);
+
+        if raw_num.is_nan() || raw_num == 0.0 || raw_num.is_infinite() {
+            raw_num as u32
+        } else {
+            f64::floor(raw_num) as u32
         }
     }
 }
