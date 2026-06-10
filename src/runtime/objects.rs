@@ -2,9 +2,9 @@ use std::collections::{HashMap};
 use std::rc::Rc;
 use std::cell::{Cell, RefCell};
 
-use crate::runtime::values::{JSValue};
+use crate::runtime::values::JSValue;
 use crate::runtime::funcs::JSFunction;
-// todo: make string pool, object heap, metatable-like objects, and Function. Create an object Shape first.
+use crate::runtime::ctx::JSContext;
 
 pub const DUD_SHAPE_ID: i32 = 0;
 pub const DEFAULT_SHAPE_POPULATION: usize = 4096;
@@ -37,13 +37,13 @@ impl Default for Shape {
 }
 
 impl Shape {
-    pub fn resolve_offset(&self, key_hash: usize) -> Option<usize> {
-        self.entries.get(&key_hash).copied()
+    pub fn resolve_offset(&self, key_id: usize) -> Option<usize> {
+        self.entries.get(&key_id).copied()
     }
 
-    pub fn resolve_subshape_id(&self, key_hash: usize) -> Option<i32> {
+    pub fn resolve_subshape_id(&self, key_id: usize) -> Option<i32> {
         for (link_key, child_id) in &self.links {
-            if *link_key == key_hash {
+            if *link_key == key_id {
                 return Some(*child_id);
             }
         }
@@ -109,6 +109,8 @@ pub const JS_STRING_COST: usize = 24;
 pub struct ExoticObject {
     pub props: Vec<Property>,
     pub items: Vec<JSValue>,
+    pub in_proto: JSValue,
+    pub out_proto: JSValue,
     pub shape: i32,
 }
 
@@ -120,20 +122,125 @@ pub enum JSObjectWrap {
 }
 
 impl JSObjectWrap {
-    pub fn as_object(&mut self) -> Option<&mut ExoticObject> {
+    pub fn as_object(&self) -> Option<&ExoticObject> {
         if let Self::Exotic(object_ref) = self {
-            return Some(object_ref)
-        }
+            Some(object_ref)
+        } else {
+            let Self::Func(func_ref) = self else {
+                return None;
+            };
 
-        None
+            Some(&func_ref.data)
+        }
     }
 
-    pub fn as_func(&mut self) -> Option<&mut JSFunction> {
+    pub fn as_object_mut(&mut self) -> Option<&mut ExoticObject> {
+        if let Self::Exotic(object_ref) = self  {
+            Some(object_ref)
+        } else {
+            let Self::Func(func_ref) = self else {
+                return None;
+            };
+
+            Some(&mut func_ref.data)
+        }
+    }
+
+    pub fn as_func(&self) -> Option<&JSFunction> {
         if let Self::Func(func_ref) = self {
             return Some(func_ref);
         }
 
         None
+    }
+
+    pub fn as_func_mut(&mut self) -> Option<&mut JSFunction> {
+        if let Self::Func(func_ref) = self {
+            return Some(func_ref);
+        }
+
+        None
+    }
+
+    pub fn get_property_data_value(&self, ctx: &mut JSContext, key_id: usize, ic_id: u16) -> Option<JSValue> {
+        let my_data = self.as_object()?;
+        let my_shape_id = my_data.shape;
+
+        let (prop_offset, ic_dirty) = unsafe {
+            if let Some (ic_slot) = ctx.icp.add(ic_id as usize).as_mut().unwrap().find(my_shape_id, key_id) {
+                (Some(ic_slot), false)
+            } else if let Some(slow_prop_ref) = ctx.shapes.fetch(my_shape_id) {
+                (slow_prop_ref.resolve_offset(key_id), true)
+            } else { (None, true) }
+        };
+
+        prop_offset?;
+
+        if ic_dirty {
+            unsafe {
+                ctx.icp.add(ic_id as usize).as_mut_unchecked().update(my_shape_id, key_id, prop_offset.unwrap());
+            }
+        }
+
+        match &my_data.props.get(prop_offset.unwrap()).unwrap().body {
+            PropBody::Data(prop_v) => Some(*prop_v),
+            _ => None
+        }
+    }
+
+    pub fn set_property_data_mut(&mut self, ctx: &mut JSContext, key_id: usize, ic_id: u16, arg: &JSValue) -> bool {
+        let Some(my_data) = self.as_object_mut() else { return false; };
+        let my_shape_id = my_data.shape;
+
+        let (prop_offset, ic_dirty, shape_dirty) = unsafe {
+            if let Some (ic_slot) = ctx.icp.add(ic_id as usize).as_mut().unwrap().find(my_shape_id, key_id) {
+                (Some(ic_slot), false, false)
+            } else if let Some(slow_prop_ref) = ctx.shapes.fetch(my_shape_id) {
+                if let Some(present_prop_offset) = slow_prop_ref.resolve_offset(key_id) {
+                    (Some(present_prop_offset), true, false)
+                } else {
+                    (Some(my_data.props.len()), true, true)
+                }
+            } else { (None, true, true) }
+        };
+
+        if prop_offset.is_none() {
+            return false;
+        }
+
+        if shape_dirty {
+            let maybe_old_shape_child_id = ctx.shapes.fetch_mut(my_shape_id).expect("Expected valid shape reference by ID in objects.rs ~ set_property_data_mut!").resolve_subshape_id(key_id);
+
+            if let Some(existing_child_shape_id) = maybe_old_shape_child_id {
+                my_data.shape = existing_child_shape_id;
+            } else {
+                let temp_child_shape = ctx.shapes.fetch_mut(my_shape_id).unwrap().derive_child(key_id, my_data.shape);
+                let temp_child_shape_id = ctx.shapes.store(temp_child_shape).expect("Exhausted shape IDs to i32::MAX in objects.rs ~ set_property_data_mut!");
+                my_data.shape = temp_child_shape_id;
+                ctx.shapes.fetch_mut(my_shape_id).unwrap().add_transition(key_id, temp_child_shape_id);
+            }
+
+            my_data.props.push(Property {
+                body: PropBody::Data(*arg),
+                flags: PropFlag::Writable as u8 | PropFlag::Configurable as u8
+            });
+        }
+
+        if ic_dirty {
+            unsafe {
+                ctx.icp.add(ic_id as usize).as_mut_unchecked().update(my_shape_id, key_id, prop_offset.unwrap());
+            }
+        }
+
+        match &mut my_data.props.get_mut(prop_offset.unwrap()).unwrap().body {
+            PropBody::Data(prop_v) => {
+                *prop_v = *arg;
+                true
+            },
+            _ => {
+                false
+            }
+        }
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::runtime::values::JSValue;
+use crate::runtime::objects::{ExoticObject};
 use crate::runtime::code::Chunk;
 use crate::runtime::ctx::{JSContext, EvalStatus};
 
@@ -13,10 +13,7 @@ pub enum FuncBody {
 #[derive(Debug, Clone)]
 pub struct JSFunction {
     pub body: FuncBody,
-    /// Internal `[[Prototype]]` attribute for implementation, specifically `Function.prototype`!
-    pub in_pt: JSValue,
-    /// Exposed Prototype for implementation, used for attaching methods to constructed objects upon a ctor call.
-    pub out_pt: JSValue,
+    pub data: ExoticObject,
     /// For `Function.length`
     pub arity: u16,
     /// Unused for now: indicates whether the special `=>` function behavior applies:
@@ -26,21 +23,19 @@ pub struct JSFunction {
 }
 
 impl JSFunction {
-    pub fn native(f: NativeFn, in_proto: JSValue, outer_proto: JSValue, arity: u16) -> Self {
+    pub fn native(f: NativeFn, data_object: ExoticObject, arity: u16) -> Self {
         Self {
             body: FuncBody::Native(f),
-            in_pt: in_proto,
-            out_pt: outer_proto,
+            data: data_object,
             arity,
             is_arrow: false
         }
     }
 
-    pub fn bcode(f: Chunk, in_proto: JSValue, outer_proto: JSValue, arity: u16, is_arrow: bool) -> Self {
+    pub fn bcode(f: Chunk, data_object: ExoticObject, arity: u16, is_arrow: bool) -> Self {
         Self {
             body: FuncBody::Bytecode(f),
-            in_pt: in_proto,
-            out_pt: outer_proto,
+            data: data_object,
             arity,
             is_arrow
         }
