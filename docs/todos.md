@@ -2,15 +2,16 @@
 
 #### v0.1.0
  - Support more JS operators, including prefix, postfix, bitwise, and logical ops.
-    - Prefix and postfix:
+    - Prefix and postfix: **DONE**
         - prefix first for `++` and `--`
         - postfix after prefix versions
-    - Bitwise:
-        - `~` and `!` --> unary rule
-        - `&`, `|`, `^` --> rule between equality and logical
-    - Logical operators `&&`, `||`, `!`
+    - Bitwise: **DONE**
+        - Grammar 1: `unary -> ("~" | ...) inner`
+        - Grammar 2: `equality & equality` -> `bitand ^ bitand` -> `bitxor | bitxor`
+        - `~`, `&`, `|`, `^` --> rule between equality and logical
+    - Logical operators `&&`, `||`, `!` **DONE**
         - `&&` or `||` will short circuit evaluate LHS and/or RHS, possibly not boolean
-    - Add loose equality:
+    - Add loose equality: **TODO**
         - IF same types:
             - undefined or null on either side => true
             - boolean => direct comparison
@@ -22,15 +23,19 @@
             - string on either side vs. number => coerce any string to number and compare
             - object on either side vs. number or string => coerce objects to primitive number or string and compare
             - ... => false
-    - Add `void`, `typeof`, `delete`
- - Support compound assignment ops: `*=`, `/=`, `+=`, `-=`
  - Support more control flow: `while`, C-style `for`, `switch`
+    - Add `break` and `continue` support.
+ - Support global this.
  - Support special impl attributes in global object properties: `IsDecl` must be checked on `delete`.
  - Support property semantics: data vs. accessor, writable + configurable + enumerable.
- - Support global this.
  - Support simple functions, including their call-this semantics.
  - Support native display(...args) function.
- - Support array (native object with array prototype)
- - Support array literals.
- - Support array prototype methods except `sort` and locales.
- - Support built-in `Date` object with prototype.
+
+#### v0.2.0
+ - Support compound assignment ops: `*=`, `/=`, `+=`, `-=`
+ - Add `typeof`, `delete`
+ - Support built-in `Date`, `Math`.
+ - Support built-in `Array`, `Object`.
+    - Support array (native object with array prototype)
+    - Support array literals.
+    - Support array prototype methods except `sort` and locales.

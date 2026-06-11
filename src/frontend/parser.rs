@@ -289,11 +289,13 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         let first_tk_pos = self.pos;
 
         let prefix_unary_op = match self.tokens[self.pos].kind {
-            TokenKind::KeywordNew => Operator::New,
             TokenKind::OperatorBang => Operator::NegBool,
             TokenKind::OperatorPlus => Operator::ForceNum,
+            TokenKind::OperatorMinus => Operator::NegNum,
             TokenKind::OperatorPlusPlus => Operator::Inc,
             TokenKind::OperatorMinusMinus => Operator::Dec,
+            TokenKind::OperatorBitFlip => Operator::BitFlip,
+            TokenKind::KeywordNew => Operator::New,
             TokenKind::KeywordDelete => Operator::Delete,
             TokenKind::KeywordTypeOf => Operator::TypeOf,
             TokenKind::KeywordVoid => Operator::Void,
@@ -469,8 +471,28 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         Ok(lhs)
     }
 
-    fn parse_bit_or(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
+    fn parse_bit_xor(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
         let mut lhs = self.parse_bit_and()?;
+
+        while !self.at_eof() {
+            if self.tokens[self.pos].kind != TokenKind::OperatorBitXor {
+                break;
+            };
+            self.consume();
+
+            let pre_rhs_pos = self.pos;
+            lhs = Box::new(SyntaxNode {
+                data: SyntaxData::Binary { l: lhs, r: self.parse_bit_and()?, op: Operator::BitXor },
+                first_tk: pre_rhs_pos,
+                end_tk: self.pos,
+            });
+        }
+
+        Ok(lhs)
+    }
+
+    fn parse_bit_or(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
+        let mut lhs = self.parse_bit_xor()?;
 
         while !self.at_eof() {
             if self.tokens[self.pos].kind != TokenKind::OperatorBitOr {
@@ -480,7 +502,7 @@ impl<'external_content_lt> Parser<'external_content_lt> {
 
             let pre_rhs_pos = self.pos;
             lhs = Box::new(SyntaxNode {
-                data: SyntaxData::Binary { l: lhs, r: self.parse_bit_and()?, op: Operator::BitOr },
+                data: SyntaxData::Binary { l: lhs, r: self.parse_bit_xor()?, op: Operator::BitOr },
                 first_tk: pre_rhs_pos,
                 end_tk: self.pos,
             });
