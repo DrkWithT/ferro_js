@@ -270,7 +270,7 @@ impl<'source_lt> Lexer<'source_lt> {
     }
 
     fn lex_operator(&mut self, source: &'source_lt str) -> Token {
-        let mut temp_token = self.lex_while(|c| {matches!(c, '%' | '*' | '/' | '+' | '-' | '!' | '<' | '>' | '=' | '&' | '|')});
+        let mut temp_token = self.lex_while(|c| {matches!(c, '%' | '*' | '/' | '+' | '-' | '!' | '<' | '>' | '=' | '&' | '|' | '^' | '~')});
 
         let temp_lexeme = temp_token.to_str(source);
         temp_token.kind = *self.specials.get(temp_lexeme).unwrap_or(&TokenKind::Unknown);

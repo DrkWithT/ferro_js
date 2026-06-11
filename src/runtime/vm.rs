@@ -1,5 +1,5 @@
 use crate::runtime::values::{JSValue};
-use crate::runtime::objects::{DUD_POOL_ID, JSObjectWrap, PropBody, PropFlag, Property};
+use crate::runtime::objects::{DUD_POOL_ID};
 use crate::runtime::code::{Opcode};
 use crate::runtime::ctx::{CallFrame, EvalStatus, JSContext};
 
@@ -164,148 +164,32 @@ unsafe fn op_set_local(context: &mut JSContext, stack: *mut JSValue) {
 
 unsafe fn op_get_var(context: &mut JSContext, stack: *mut JSValue) {
     unsafe {
+        let key_id = stack.add(context.sp as usize).read().get_str_id().unwrap_or(0) as usize;
         let ic_id = context.ip.read().flags;
-        let env_ref = context.frames.last().expect("Expected JS lexical environment in vm.rs: op_get_var").this_p.as_ref().unwrap();
 
-        if let JSObjectWrap::Func(_) = env_ref {
-            eprintln!("VM ERR: Expected environment object, not a function.");
+        if let Some(var_value) = context.frames.last().expect("Expected JS lexical environment in vm.rs: op_get_var").this_p.as_ref().unwrap().get_property_data_value(context, key_id, ic_id) {
+            *stack.add(context.sp as usize) = var_value;
+            context.ip = context.ip.add(1);
+        } else {
+            eprintln!("See vm.rs ~ op_get_var");
             context.status = EvalStatus::BadAccess;
-            return;
         }
-
-        let key_str_id = stack.add(context.sp as usize).read().get_str_id().unwrap_or(DUD_POOL_ID);
-
-        if key_str_id == DUD_POOL_ID {
-            eprintln!("VM ERR: Expected environment key string by ID, found dud ID of -1");
-            context.status = EvalStatus::BadAccess;
-            return;
-        }
-
-        println!("NOTE: IP = {}", context.ip.read());
-
-        if let JSObjectWrap::Exotic(env_obj) = env_ref {
-            let env_shape = env_obj.shape;
-            // 1. Check IC
-            if let Some(ic_ref) = context.icp.add(ic_id as usize).as_mut() {
-                if let Some(prop_offset) = ic_ref.find(env_shape, key_str_id as usize) {
-                    *stack.add(context.sp as usize) = match &env_obj.props[prop_offset].body {
-                        PropBody::Data(value) => *value,
-                        PropBody::Accessor((_, _)) => {
-                            // ! FIXME: implement getter call here!
-                            JSValue::Undefined
-                        }
-                    };
-                } else {
-                    let shape_ref = context.shapes.fetch(env_shape).expect("Expected valid shape at vm.rs: op_get_var");
-                    let shape_id = shape_ref.id;
-                    let key_id = key_str_id as usize;
-                    let prop_pos = shape_ref.resolve_offset(key_str_id as usize).expect("Expected valid property offset from Shape at vm.rs: op_get_var");
-
-                    ic_ref.update(shape_id, key_id, prop_pos);
-
-                    *stack.add(context.sp as usize) = match &env_obj.props[prop_pos].body {
-                        PropBody::Data(value) => *value,
-                        _ => {
-                            // ! FIXME: implement getter call here!
-                            JSValue::Undefined
-                        }
-                    };
-                }
-
-                context.ip = context.ip.add(1);
-                return;
-            }
-        }
-
-        context.status = EvalStatus::BadAccess;
     }
 }
 
 unsafe fn op_set_var(context: &mut JSContext, stack: *mut JSValue) {
     unsafe {
-        let src_value = stack.add(context.sp as usize).as_ref().expect("Expected JSValue in stack in vm.rs: op_set_var");
+        let key_id = stack.add(context.sp as usize - 1).read().get_str_id().unwrap_or(0) as usize;
+        let temp_value = stack.add(context.sp as usize).as_ref_unchecked();
         let ic_id = context.ip.read().flags;
 
-        if context.frames.last_mut().expect("Expected JS lexical environment in vm.rs: op_set_var").this_p.as_mut().unwrap().as_object().is_none() {
-            eprintln!("VM ERR: Expected environment object, not a function.");
+        if context.frames.last().expect("Expected JS lexical environment in vm.rs: op_set_var").this_p.as_mut_unchecked().set_property_data_mut(context, key_id, ic_id, temp_value) {
+            context.sp -= 2;
+            context.ip = context.ip.add(1);
+        } else {
+            eprintln!("See vm.rs ~ op_set_var");
             context.status = EvalStatus::BadAccess;
-            return;
         }
-
-        let key_str_id = stack.add(context.sp as usize - 1).read().get_str_id().unwrap_or(DUD_POOL_ID);
-
-        if key_str_id == DUD_POOL_ID {
-            eprintln!("VM ERR: Expected environment key string by ID, found non-key value of {}", stack.add(context.sp as usize - 1).read());
-            context.status = EvalStatus::BadAccess;
-            return;
-        }
-
-        println!("NOTE: IP = {}", context.ip.read());
-
-        if let JSObjectWrap::Exotic(env_obj) = context.frames.last_mut().expect("Expected JS lexical environment in vm.rs: op_set_var").this_p.as_mut().unwrap() {
-            let old_env_shape = env_obj.shape;
-            // 1. Check IC
-            if let Some(ic_ref) = context.icp.add(ic_id as usize).as_mut() {
-                if let Some(prop_offset) = ic_ref.find(old_env_shape, key_str_id as usize) {
-                    match &mut env_obj.props[prop_offset].body {
-                        PropBody::Data(value) => {
-                            println!("NOTE: prop-{prop_offset}({}) = {}", *value, *src_value);
-                            *value = *src_value
-                        },
-                        PropBody::Accessor((_, _)) => {
-                            // ! FIXME: implement getter call here!
-                        }
-                    }
-                } else {
-                    let shape_id = context.shapes.fetch_mut(old_env_shape).expect("Expected valid shape at vm.rs: op_set_var").id;
-                    let key_id = key_str_id as usize;
-
-                    // ? 1. If the env-property exists, update it.
-                    let prop_pos = if let Some(prop_offset) = context.shapes.fetch_mut(shape_id).unwrap().resolve_offset(key_str_id as usize) {
-                        prop_offset
-                    } else {
-                        // ? 2. If the env-property is absent, add it to a new shape, becoming part of the env-object's new layout. Then add that new property to env.
-                        let new_shape_id = context.shapes.next_sid;
-
-                        // ? A new Shape is created here & quickly inserted to the Shape pool...
-                        let new_shape = context.shapes.fetch_mut(old_env_shape).unwrap().derive_child(key_id, new_shape_id);
-                        env_obj.shape = context.shapes.store(
-                            new_shape
-                        ).expect("Exhausted Shape IDs to i32::MAX");
-
-                        // ? The new shape now exists in its pool because we just saved it... unwrap go brr >:)
-                        let temp_prop_pos = context.shapes.fetch(new_shape_id).unwrap().resolve_offset(key_id).unwrap();
-
-                        env_obj.props.push(Property {
-                            body: PropBody::Data(*src_value),
-                            flags: PropFlag::Writable as u8 | PropFlag::Configurable as u8
-                        });
-
-                        ic_ref.update(new_shape_id, key_id, temp_prop_pos);
-
-                        temp_prop_pos
-                    };
-
-                    match &mut env_obj.props[prop_pos].body {
-                        PropBody::Data(value) => {
-                            println!("NOTE: prop-{prop_pos}({}) = {}", *value, *src_value);
-                            *value = *src_value;
-                        },
-                        _ => {
-                            // ! FIXME: implement getter call here!
-                            eprintln!("Accessor update not implemented!");
-                            context.status = EvalStatus::BadOp;
-                        }
-                    }
-                }
-
-                context.sp -= 2;
-                context.ip = context.ip.add(1);
-                return;
-            }
-        }
-
-        context.status = EvalStatus::BadAccess;
     }
 }
 
@@ -700,6 +584,10 @@ pub fn run_vm(context: &mut JSContext) -> EvalStatus {
                 Opcode::Call => op_call(context, stack_base_ptr),
                 Opcode::CallCtor => op_call_ctor(context, stack_base_ptr),
                 Opcode::Ret => op_ret(context, stack_base_ptr),
+                _ => {
+                    eprintln!("Invalid / unsupported opcode {} !", context.ip.as_ref_unchecked().op as u16);
+                    context.status = EvalStatus::BadOp;
+                }
             };
         }
     }

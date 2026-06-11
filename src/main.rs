@@ -68,6 +68,8 @@ fn main() -> ExitCode {
     tokenizer.map_special_lexical("-", TokenKind::OperatorMinus);
     tokenizer.map_special_lexical("===", TokenKind::OperatorStrictEquals);
     tokenizer.map_special_lexical("!==", TokenKind::OperatorStrictUnequals);
+    tokenizer.map_special_lexical("==", TokenKind::OperatorLooseEqual);
+    tokenizer.map_special_lexical("!=", TokenKind::OperatorLooseUnequal);
     tokenizer.map_special_lexical("<", TokenKind::OperatorLesser);
     tokenizer.map_special_lexical("<=", TokenKind::OperatorLesserEquals);
     tokenizer.map_special_lexical(">", TokenKind::OperatorGreater);
@@ -75,6 +77,7 @@ fn main() -> ExitCode {
     tokenizer.map_special_lexical("&&", TokenKind::OperatorAnd);
     tokenizer.map_special_lexical("||", TokenKind::OperatorOr);
     tokenizer.map_special_lexical("=", TokenKind::OperatorAssign);
+    tokenizer.map_special_lexical("~", TokenKind::OperatorBitFlip);
     tokenizer.map_special_lexical("|", TokenKind::OperatorBitOr);
     tokenizer.map_special_lexical("&", TokenKind::OperatorBitAnd);
     tokenizer.map_special_lexical("<<", TokenKind::OperatorBShiftLeft);

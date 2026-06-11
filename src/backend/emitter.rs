@@ -1,16 +1,15 @@
-use std::collections::{HashMap};
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::cell::{Cell/*, RefCell*/};
 
 use crate::frontend::{
     token::{TokenKind, Token},
-    ast::{Operator, SyntaxData, SyntaxNode, AST},
+    ast::{Operator, /*SyntaxId,*/ SyntaxData, SyntaxNode, AST},
 };
 
 use crate::runtime::code::InlineCache;
 use crate::runtime::{
-    // TODO: generate InlineCaches.
-    code::{Opcode, Instruction, /*InlineCache,*/ Chunk, Program},
+    code::{Opcode, Instruction, Chunk, Program},
     values::{JSValue},
     objects::{JSObjPtr, JSStrPtr, JS_OBJECT_COST, JS_STRING_COST, ItemPool, /*ExoticObject*/},
     // funcs::{FuncBody, JSFunction},
@@ -23,36 +22,6 @@ pub const JS_OBJECT_PROTO_ALIAS: &str = "[[Object.prototype]]";
 pub const JS_ARRAY_PROTO_ALIAS: &str = "[[Array.prototype]]";
 pub const JS_FUNC_PROTO_ALIAS: &str = "[[Function.prototype]]";
 
-
-struct ValueGuard<T: Clone> {
-    // Holds a bool value pointer to restore a flag through upon Drop.
-    pub vp: *mut T,
-    pub old: T,
-}
-
-impl<T: Clone> ValueGuard<T> {
-    pub fn new(flag_p: *mut T, current: T) -> Self {
-        let old_v = unsafe {flag_p.read()};
-        unsafe {*flag_p = current;}
-
-        Self {
-            vp: flag_p,
-            old: old_v,
-        }
-    }
-
-    #[allow(unused)]
-    /// Currently unused, but might be used later.
-    pub fn current(&self) -> Option<&T> {
-        Some(unsafe {&*self.vp})
-    }
-}
-
-impl<T: Clone> Drop for ValueGuard<T> {
-    fn drop(&mut self) {
-        unsafe { *(self.vp) = self.old.clone(); }
-    }
-}
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -80,7 +49,6 @@ pub struct SymbolScope {
     pub next_local_id: i32, // ? calculated in any stmt block prepass, which helps elucidate how many stack slots are needed for all vars / lets
     pub next_const_id: i32,
     pub next_ic_id: u8,
-    pub is_global: bool,
 }
 
 impl Default for SymbolScope {
@@ -90,41 +58,73 @@ impl Default for SymbolScope {
             next_local_id: 1,
             next_const_id: 0,
             next_ic_id: 0,
-            is_global: true,
         }
     }
 }
 
-impl SymbolScope {
-    pub fn new(is_global: bool) -> Self {
-        Self {
-            symbols: HashMap::default(),
-            next_local_id: 1,
-            next_const_id: 0,
-            next_ic_id: 0,
-            is_global,
-        }
+#[repr(u16)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum EmitterFlag {
+    /// The emitter should analyze the sub-AST for anything captured from caller / by possible callees.
+    CheckFnIsSimple = (1 << 0),
+    /// The emitter should visit the sub-AST to resolve hoisted names.
+    PrepassVars = (1 << 1),
+    /// Is the expression at global scope / top-level?
+    InTopLevel = (1 << 2),
+    /// Indicates if an expression is a destination for side effects i.e assignments, adding/deleting properties, etc.
+    InLocator = (1 << 3),
+    /// Indicates if an expression is inside a LHS expression.
+    InAccess = (1 << 4),
+    /// Indicates if an expression is somewhere within a `new` expression.
+    InConstruction = (1 << 5),
+    /// Are the function's variable semantics simple, specifically not requiring an environment object?
+    IsFuncSimple = (1 << 6),
+    /// Has the sub-AST compilation succeeded?
+    IsVisitOK = (1 << 7),
+}
+
+#[derive(Default, Clone, Copy)]
+pub struct EmitterHints {
+    pub bits: u16
+}
+
+impl EmitterHints {
+    pub fn enable_flag(&mut self, bitflag: EmitterFlag) {
+        self.bits |= bitflag as u16;
+    }
+
+    pub fn disable_flag(&mut self, bitflag: EmitterFlag) {
+        self.bits &= !(bitflag as u16);
+    }
+
+    pub fn get_flag(&self, bitflag: EmitterFlag) -> bool {
+        (self.bits & (bitflag as u16)) == bitflag as u16
+    }
+
+    pub fn with_flag(mut self, bitflag: EmitterFlag) -> Self {
+        self.enable_flag(bitflag);
+        self
+    }
+
+    pub fn without_flag(mut self, bitflag: EmitterFlag) -> Self {
+        self.disable_flag(bitflag);
+        self
+    }
+
+    pub fn check_ok(&self) -> bool {
+        self.get_flag(EmitterFlag::IsVisitOK)
     }
 }
 
 pub struct Emitter {
-    // todo: track names to info, a simple heap, simple string pool, tag-stack
     pub heap: ItemPool<JSObjPtr, JS_OBJECT_COST>,
     pub spool: ItemPool<JSStrPtr, JS_STRING_COST>,
+    pub capturing_names: HashSet<String>,
     pub chunks: Vec<Chunk>,
     pub scopes: Vec<SymbolScope>,
     pub cached_info: Option<SymbolInfo>,
     pub local_reserve_n: i32,
     pub line: u16,
-    pub in_simplicity_check: bool,
-    pub in_prepass: bool,
-    /// Indicates if an expression is a destination for side effects i.e assignments, adding/deleting properties, etc.
-    pub in_locator: bool,
-    pub in_access: bool,
-    /// Indicates if an expression is somewhere within a `new` expression.
-    pub in_construction: bool,
-    /// Indicates whether a function MUST allocate an environment object IFF it doesn't capture any outside names & doesn't return a closure. At runtime, there will be a check for a constructor-type call which requires: `this = Object.create(func.prototype)`.
-    pub is_func_simple: bool,
 }
 
 impl Emitter {
@@ -132,21 +132,16 @@ impl Emitter {
         Self {
             heap: ItemPool::<JSObjPtr, JS_OBJECT_COST>::new(object_population),
             spool: ItemPool::<JSStrPtr, JS_STRING_COST>::new(str_population),
+            capturing_names: HashSet::default(),
             chunks: vec![Chunk {
                 icaches: vec![],
                 consts: vec![],
                 code: vec![]
             }],
-            scopes: vec![SymbolScope::new(true)],
+            scopes: vec![SymbolScope::default()],
             cached_info: None,
             local_reserve_n: 0,
             line: 1,
-            in_simplicity_check: false,
-            in_prepass: false,
-            in_locator: false,
-            in_access: false,
-            in_construction: false,
-            is_func_simple: false,
         }
     }
 
@@ -285,7 +280,6 @@ impl Emitter {
         }
     }
 
-    // todo
     fn record_constant(&mut self, s: &str, v: JSValue) -> Option<SymbolInfo> {
         if let Some(pre_info) = self.resolve_constant(s) {
             Some(pre_info)
@@ -305,14 +299,16 @@ impl Emitter {
         }
     }
 
-    fn emit_name(&mut self, lexeme: &str) -> bool {
+    fn emit_name(&mut self, lexeme: &str, hints: EmitterHints) -> EmitterHints {
         // ? 1. Handle globalThis var bindings like `globalThisEnv.[[name]]`
         // ? 2. Handle simple, non capturing funcs
 
-        self.is_func_simple = self.is_func_simple && self.scopes.len() != 1;
+        let name_in_locator = hints.get_flag(EmitterFlag::InLocator);
+        let name_in_access = hints.get_flag(EmitterFlag::InAccess);
+        let name_needs_env = hints.get_flag(EmitterFlag::IsFuncSimple) && self.scopes.len() != 1;
 
-        let name_info = if !self.in_locator && !self.in_access && !self.is_func_simple {
-            let Some(var_key_info) = self.resolve_global_string(lexeme, true) else { eprintln!("Could not resolve env-var name '{lexeme}' here."); return false; };
+        let name_info = if !name_in_locator && !name_in_access && !name_needs_env {
+            let Some(var_key_info) = self.resolve_global_string(lexeme, true) else { eprintln!("Could not resolve env-var name '{lexeme}' here."); return hints.without_flag(EmitterFlag::IsVisitOK); };
             
             self.emit_unary_inst(Opcode::PushStr, var_key_info.id, 0);
 
@@ -324,7 +320,8 @@ impl Emitter {
                 Opcode::Ret,
                 false, // Continue-generation flag: If off, exit this function early.
             )
-        } else if !self.in_locator && !self.in_access && self.is_func_simple {
+        } else if !name_in_locator && !name_in_access && name_needs_env {
+            self.capturing_names.insert(lexeme.to_owned());
             (
                 self.resolve_local(lexeme).or_else(|| {
                     self.resolve_global(lexeme)
@@ -332,7 +329,7 @@ impl Emitter {
                 Opcode::GetLocal,
                 true,
             )
-        } else if !self.in_locator && self.in_access && !self.is_func_simple {
+        } else if !name_in_locator && name_in_access && !name_needs_env {
             (
                 self.resolve_global_string(lexeme, true).or_else(|| {
                     self.record_global_string(lexeme, true)
@@ -340,7 +337,7 @@ impl Emitter {
                 Opcode::PushStr,
                 true,
             )
-        } else if self.in_locator && !self.in_access && !self.is_func_simple {
+        } else if name_in_locator && !name_in_access && !name_needs_env {
             // ? Skip emission of LHS for assignment exprs to prevent a messy stack situation... Just put its environment object key.
             (
                 self.resolve_global_string(lexeme, true).or_else(|| {
@@ -361,36 +358,35 @@ impl Emitter {
         // println!("cached_info in emit_name(...):");
         // dbg!(self.cached_info, self.in_simplicity_check, self.in_prepass, self.in_locator);
 
-        if !name_info.2 {
-            return true;
+        if name_info.2 {   
+            let name_opcode = name_info.1;
+            let Some(named_info) = self.cached_info else { return hints.without_flag(EmitterFlag::IsVisitOK); };
+            
+            self.emit_unary_inst(name_opcode, named_info.id, 0);
         }
 
-        let name_opcode = name_info.1;
-        let Some(named_info) = self.cached_info else { return false; };
-
-        self.emit_unary_inst(name_opcode, named_info.id, 0);
-
-        true
+        hints
     }
 
-    fn emit_nil_node(&mut self, _: &str, _: &SyntaxData, _: &AST) -> bool {
+    fn emit_nil_node(&mut self, _: &str, _: &SyntaxData, _: &AST, hints: EmitterHints) -> EmitterHints {
         self.emit_nonary_inst(Opcode::PushUndef, 0);
-        true
+        hints
     }
 
-    fn emit_literal(&mut self, source: &str, node: &SyntaxData, ast: &AST) -> bool {
-        let SyntaxData::Literal(lt_tk_pos) = node else { return false; };
+    fn emit_literal(&mut self, source: &str, node: &SyntaxData, ast: &AST, mut hints: EmitterHints) -> EmitterHints {
+        let SyntaxData::Literal(lt_tk_pos) = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
         let Token {begin, end, line, kind} = ast.tokens[*lt_tk_pos];
         let literal_lexeme = &source[begin as usize .. end as usize];
 
-        if self.in_simplicity_check {
+        if hints.get_flag(EmitterFlag::CheckFnIsSimple) {
             if kind == TokenKind::Identifier && self.resolve_local(literal_lexeme).is_none() {
-                self.is_func_simple = false;
+                // detect captured name
+                hints.disable_flag(EmitterFlag::IsFuncSimple);
             }
 
-            return true;
-        } else if self.in_prepass {
-            return true;
+            return hints;
+        } else if hints.get_flag(EmitterFlag::PrepassVars) {
+            return hints;
         }
 
         self.line = line;
@@ -398,62 +394,62 @@ impl Emitter {
         match kind {
             TokenKind::LiteralUndefined => {
                 self.emit_nonary_inst(Opcode::PushUndef, 0);
-                true
+                hints
             },
             TokenKind::LiteralNull => {
                 self.emit_nonary_inst(Opcode::PushNull, 0);
-                true
+                hints
             },
             TokenKind::LiteralNaN => {
                 self.emit_nonary_inst(Opcode::PushNaN, 0);
-                true
+                hints
             },
             TokenKind::LiteralInfinity => {
                 self.emit_nonary_inst(Opcode::PushInf, 0);
-                true
+                hints
             },
             TokenKind::LiteralTrue | TokenKind::LiteralFalse => {
                 self.emit_nonary_inst(Opcode::PushBool, if kind == TokenKind::LiteralTrue {1} else {0});
-                true
+                hints
             },
             TokenKind::LiteralDecInt => {
                 if let Some(num_cid) = self.record_constant(literal_lexeme, JSValue::Number(str::parse::<i32>(literal_lexeme).expect("Unexpected malformed decimal int at emitter.rs.") as f64)) {
                     self.emit_unary_inst(Opcode::PushConst, num_cid.id, 0);
-                    true
+                    hints
                 } else {
-                    false
+                    hints.without_flag(EmitterFlag::IsVisitOK)
                 }
             },
             TokenKind::LiteralOctInt => {
                 if let Some(num_cid) = self.record_constant(literal_lexeme, JSValue::Number(i32::from_str_radix(literal_lexeme, 8).expect("Unexpected malformed octal int at emitter.rs.") as f64)) {
                     self.emit_unary_inst(Opcode::PushConst, num_cid.id, 0);
-                    true
+                    hints
                 } else {
-                    false
+                    hints.without_flag(EmitterFlag::IsVisitOK)
                 }
             },
             TokenKind::LiteralBinInt => {
                 if let Some(num_cid) = self.record_constant(literal_lexeme, JSValue::Number(i32::from_str_radix(literal_lexeme, 2).expect("Unexpected malformed binary int at emitter.rs.") as f64)) {
                     self.emit_unary_inst(Opcode::PushConst, num_cid.id, 0);
-                    true
+                    hints
                 } else {
-                    false
+                    hints.without_flag(EmitterFlag::IsVisitOK)
                 }
             },
             TokenKind::LiteralHexInt => {
                 if let Some(num_cid) = self.record_constant(literal_lexeme, JSValue::Number(i32::from_str_radix(literal_lexeme, 16).expect("Unexpected malformed hexadecimal int at emitter.rs.") as f64)) {
                     self.emit_unary_inst(Opcode::PushConst, num_cid.id, 0);
-                    true
+                    hints
                 } else {
-                    false
+                    hints.without_flag(EmitterFlag::IsVisitOK)
                 }
             },
             TokenKind::LiteralFloat => {
                 if let Some(num_cid) = self.record_constant(literal_lexeme, JSValue::Number(str::parse::<f64>(literal_lexeme).unwrap_or(f64::NAN))) {
                     self.emit_unary_inst(Opcode::PushConst, num_cid.id, 0);
-                    true
+                    hints
                 } else {
-                    false
+                    hints.without_flag(EmitterFlag::IsVisitOK)
                 }
             },
             TokenKind::LiteralString => {
@@ -462,101 +458,100 @@ impl Emitter {
                 ) {
                     if let Some(gsc_info) = self.record_constant(literal_lexeme, JSValue::StringId(gs_info.id)) {
                         self.emit_unary_inst(Opcode::PushConst, gsc_info.id, 0);
-                        true
+                        hints
                     } else {
-                        false
+                        hints.without_flag(EmitterFlag::IsVisitOK)
                     }
                 } else {
-                    false
+                    hints.without_flag(EmitterFlag::IsVisitOK)
                 }
             },
-            TokenKind::Identifier => self.emit_name(literal_lexeme),
+            TokenKind::Identifier => self.emit_name(literal_lexeme, hints),
             _ => {
-                false
+                hints.without_flag(EmitterFlag::IsVisitOK)
             }
         }
     }
 
     #[allow(unused)]
-    fn emit_object_expr(&mut self, source: &str, node: &SyntaxData, ast: &AST) -> bool {
-        if self.in_simplicity_check || self.in_prepass {
+    fn emit_object_expr(&mut self, source: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        if hints.get_flag(EmitterFlag::CheckFnIsSimple) || hints.get_flag(EmitterFlag::PrepassVars) {
             // ! FIXME: simplicity check should check each item for foreign names.
-            return true;
+            return hints;
         }
 
-        false // todo: implement AFTER object literal support in parser.
+        hints.without_flag(EmitterFlag::IsVisitOK) // todo: implement AFTER object literal support in parser.
     }
 
-    fn emit_array_expr(&mut self, source: &str, node: &SyntaxData, ast: &AST) -> bool {
-        if self.in_simplicity_check || self.in_prepass {
+    fn emit_array_expr(&mut self, source: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        if hints.get_flag(EmitterFlag::CheckFnIsSimple) || hints.get_flag(EmitterFlag::PrepassVars) {
             // ! FIXME: simplicity check should check each item for foreign names.
-            return true;
+            return hints;
         }
 
         self.emit_nonary_inst(Opcode::MakeObj, 0);
 
-        let Some(array_proto_info) = self.resolve_global(JS_ARRAY_PROTO_ALIAS) else { return false; };
+        let Some(array_proto_info) = self.resolve_global(JS_ARRAY_PROTO_ALIAS) else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
         self.emit_unary_inst(Opcode::SetProto, array_proto_info.id, 1);
 
-        let SyntaxData::ArrayExpr {items} = node else { return false; };
+        let SyntaxData::ArrayExpr {items} = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
         for (item_pos, item) in items.iter().enumerate() {
-            if !self.emit_node(source, item.as_ref(), ast) {
-                return false;
+            if !self.emit_node(source, item.as_ref(), ast, hints).check_ok() {
+                hints.without_flag(EmitterFlag::IsVisitOK);
             }
 
             let set_arr_item_ip = self.emit_unary_inst(Opcode::SetOwnProp, item_pos as i32, 0);
             self.put_ic_of_inst(set_arr_item_ip);
         }
 
-        true
+        hints
     }
 
     #[allow(unused)]
-    fn emit_lambda(&mut self, source: &str, node: &SyntaxData, ast: &AST) -> bool {
-        false // todo: implement AFTER object support!
+    fn emit_lambda(&mut self, source: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        // todo: implement AFTER object support!
+        hints.without_flag(EmitterFlag::IsVisitOK)
     }
 
-    fn emit_lhs(&mut self, src_text: &str, node: &SyntaxData, ast: &AST) -> bool {
-        let SyntaxData::Lhs {accesses, source} = node else { return false; };
+    fn emit_lhs(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, mut hints: EmitterHints) -> EmitterHints {
+        let SyntaxData::Lhs {accesses, source} = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
-        if self.in_prepass {
-            return true;
+        if hints.get_flag(EmitterFlag::PrepassVars) {
+            return hints;
         }
 
-        if self.in_simplicity_check {
+        if hints.get_flag(EmitterFlag::CheckFnIsSimple) {
             if let SyntaxData::Literal(name_token_id) = &source.as_ref().data {
                 let source_expect_msg = format!("Expected name token in LHS at tokens position {}", *name_token_id);
                 let source_token = ast.tokens.get(*name_token_id).expect(&source_expect_msg);
                 let source_name_lexeme = source_token.to_str(src_text);
 
                 if self.resolve_local(source_name_lexeme).is_none() {
-                    self.is_func_simple = false;
+                    hints.disable_flag(EmitterFlag::IsFuncSimple);
                 }
             }
 
-            return true;
+            return hints;
         }
 
-        if !self.emit_node(src_text, source, ast) {
-            return false;
+        if !self.emit_node(src_text, source, ast, hints).check_ok() {
+            return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
         let access_count = accesses.len();
 
         for (access_pos, (access_direct, access_expr)) in accesses.iter().enumerate() {            
             {
-                #[allow(unused)]
-                let guard_access_key_as_non_lvalue = ValueGuard::<bool>::new(std::ptr::from_mut(&mut self.in_locator), false);
-                if !self.emit_node(src_text, access_expr, ast) {
+                if !self.emit_node(src_text, access_expr, ast, hints.with_flag(EmitterFlag::InLocator)).check_ok() {
                     eprintln!("\n\tNote: check LHS {0} access #{access_pos} around line {1}.", if *access_direct {"[key]"} else {"'.'"}, self.line);
-                    return false;
+                    return hints.without_flag(EmitterFlag::IsVisitOK);
                 }
             }
 
             if access_pos == access_count - 1 {
-                if self.in_locator {
+                if hints.get_flag(EmitterFlag::InLocator) {
                     // ? Leave the last emitted key for LHS accesses, as there's SET_PROP VM opcodes that require that temporary value!
                     break;
                 } else {
@@ -571,32 +566,76 @@ impl Emitter {
             }
         }
 
-        self.in_access = true;
-
-        true
+        hints.with_flag(EmitterFlag::InAccess)
     }
 
-    fn emit_unary(&mut self, src_text: &str, node: &SyntaxData, ast: &AST) -> bool {
-        let SyntaxData::Unary { inner, op, .. } = node else { return false; };
+    fn emit_unary(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        let SyntaxData::Unary { inner, op, prefix } = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
-        if self.in_prepass {
-            return true;
+        if hints.get_flag(EmitterFlag::PrepassVars) {
+            return hints;
         }
 
-        if self.in_simplicity_check {
-            let _ = self.emit_node(src_text, inner, ast);
+        if hints.get_flag(EmitterFlag::CheckFnIsSimple) {
+            let _ = self.emit_node(src_text, inner, ast, hints);
 
-            return true;
+            return hints;
         }
 
-        self.in_construction = *op == Operator::New;
+        #[allow(unused)]
+        let (temp_opcode, op_is_prefix) = match op {
+            Operator::NegBool => (
+                Some(Opcode::ForceBool),
+                true
+            ),
+            Operator::ForceNum => (
+                Some(Opcode::ForceNum),
+                true
+            ),
+            Operator::Inc => (
+                // match inner.data.get_emitter_id() {
+                //     SyntaxId::Literal => Some(Opcode::IncLocal),
+                //     SyntaxId::Lhs => Some(Opcode::IncProp),
+                //     _ => None
+                // }, // todo
+                None,
+                *prefix
+            ),
+            Operator::Dec => (
+                // match inner.data.get_emitter_id() {
+                //     SyntaxId::Literal => Some(Opcode::DecLocal),
+                //     SyntaxId::Lhs => Some(Opcode::DecProp),
+                //     _ => None
+                // }, // todo
+                None,
+                *prefix
+            ),
+            Operator::Delete => (
+                // if matches!(inner.data.get_emitter_id(), SyntaxId::Literal | SyntaxId::Lhs) {
+                //     Some(Opcode::DelProp)
+                // } else { None }, // todo
+                None,
+                true
+            ),
+            Operator::TypeOf => (None, true), // todo
+            Operator::Void => (Some(Opcode::Discard), true),
+            _ => (None, true)
+        };
 
-        if !self.emit_node(src_text, inner, ast) {
-            return false;
+        if temp_opcode.is_none() {
+            return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
-        if self.in_construction {
-            return true;
+        let handle_new_unary = *op == Operator::New;
+
+        if !self.emit_node(src_text, inner, ast,
+            if handle_new_unary { hints.with_flag(EmitterFlag::InConstruction) } else { hints }
+        ).check_ok() {
+            return hints.without_flag(EmitterFlag::IsVisitOK);
+        }
+
+        if handle_new_unary {
+            return hints;
         }
 
         let opcode_opt = match op {
@@ -607,27 +646,27 @@ impl Emitter {
         };
 
         if opcode_opt.is_none() {
-            return false;
+            return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
         self.emit_nonary_inst(opcode_opt.expect("Expected opcode to be of prefix unary '-' in emitter.rs ~ line#570."), 0);
 
-        true
+        hints
     }
 
     #[allow(unused)]
-    fn emit_binary(&mut self, src_text: &str, node: &SyntaxData, ast: &AST) -> bool {
-        if self.in_prepass {
-            return true;
+    fn emit_binary(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        if hints.get_flag(EmitterFlag::PrepassVars) {
+            return hints;
         }
 
-        let SyntaxData::Binary { l, r, op } = node else { return false; };
+        let SyntaxData::Binary { l, r, op } = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
-        if self.in_simplicity_check {
-            let _ = self.emit_node(src_text, l, ast);
-            let _ = self.emit_node(src_text, r, ast);
+        if hints.get_flag(EmitterFlag::CheckFnIsSimple) {
+            let _ = self.emit_node(src_text, l, ast, hints);
+            let _ = self.emit_node(src_text, r, ast, hints);
 
-            return true;
+            return hints;
         }
 
         // TODO: implement logical && , || generation.
@@ -690,73 +729,66 @@ impl Emitter {
 
         if eval_dir_and_opcode.is_none() {
             eprintln!("Invalid operator in binary-expr.");
-            return false;
+            return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
         let DirOp { is_ltr, opcode } = eval_dir_and_opcode.expect("Expected DirOp value at emitter.rs ~ line#622.");
 
         if is_ltr {
-            if !self.emit_node(src_text, l, ast) {
-                return false;
+            if !self.emit_node(src_text, l, ast, hints).check_ok() {
+                return hints.without_flag(EmitterFlag::IsVisitOK);
             }
 
-            if !self.emit_node(src_text, r, ast) {
-                return false;
+            if !self.emit_node(src_text, r, ast, hints).check_ok() {
+                return hints.without_flag(EmitterFlag::IsVisitOK);
             }
         } else {
-            if !self.emit_node(src_text, r, ast) {
-                return false;
+            if !self.emit_node(src_text, r, ast, hints).check_ok() {
+                return hints.without_flag(EmitterFlag::IsVisitOK);
             }
 
-            if !self.emit_node(src_text, l, ast) {
-                return false;
+            if !self.emit_node(src_text, l, ast, hints).check_ok() {
+                return hints.without_flag(EmitterFlag::IsVisitOK);
             }
         }
 
         self.emit_nonary_inst(opcode, 0);
 
-        true
+        hints
     }
 
-    fn emit_assign(&mut self, src_text: &str, node: &SyntaxData, ast: &AST) -> bool {
-        let SyntaxData::Assign {dest, src} = node else { return false; };
+    fn emit_assign(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        let SyntaxData::Assign {dest, src} = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
-        if self.in_prepass {
-            return true;
+        if hints.get_flag(EmitterFlag::PrepassVars) {
+            return hints;
         }
 
-        if self.in_simplicity_check {
-            let _ = self.emit_node(src_text, src, ast);
+        if hints.get_flag(EmitterFlag::CheckFnIsSimple) {
+            let _ = self.emit_node(src_text, src, ast, hints);
 
-            return true;
+            return hints;
         }
 
-        {
-            #[allow(unused)]
-            let guard_assign_emission = ValueGuard::<bool>::new(std::ptr::from_mut(&mut self.in_locator), true);
+        let lhs_hints = self.emit_node(src_text, dest, ast, hints.with_flag(EmitterFlag::InLocator));
 
-            if !self.emit_node(src_text, dest, ast) {
-                eprintln!("\n\tNote: Invalid destination of assign-expr.");
-                return false;
-            }
+        if !lhs_hints.check_ok() {
+            eprintln!("\n\tNote: Invalid destination of assign-expr.");
+            return hints.without_flag(EmitterFlag::IsVisitOK);
         }
    
-        {
-            #[allow(unused)]
-            let guard_assign_rhs_emission = ValueGuard::<bool>::new(std::ptr::from_mut(&mut self.in_locator), false);
-
-            if !self.emit_node(src_text, src, ast) {
-                eprintln!("\n\tNote: Invalid source of assign-expr.");
-                return false;
-            }
+        if !self.emit_node(src_text, src, ast, hints.without_flag(EmitterFlag::InLocator)).check_ok() {
+            eprintln!("\n\tNote: Invalid source of assign-expr.");
+            return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
-        if self.in_access {
+        if lhs_hints.get_flag(EmitterFlag::InAccess) {
             let set_prop_ic_ip = self.emit_nonary_inst(Opcode::SetProp, 0);
 
             self.put_ic_of_inst(set_prop_ic_ip);
-            self.in_access = false;
-        } else if let Some(saved_local_info) = self.cached_info && self.is_func_simple {
+            // ! FIXME: if this emitter fn is called in an emit_function_decl() AND any names need an env:
+            // ! ...rely on passed flags to have IsFuncSimple = OFF.
+        } else if let Some(saved_local_info) = self.cached_info && hints.get_flag(EmitterFlag::IsFuncSimple) {
             self.emit_unary_inst(Opcode::SetLocal, saved_local_info.id, 0);
         } else {
             let set_var_ip = self.emit_nonary_inst(Opcode::SetVar, 0);
@@ -764,108 +796,98 @@ impl Emitter {
             self.put_ic_of_inst(set_var_ip);
         }
 
-        true
+        hints
     }
 
-    fn emit_call(&mut self, src_text: &str, node: &SyntaxData, ast: &AST) -> bool {
-        let SyntaxData::Call { args, callee } = node else { return false; };
+    fn emit_call(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        let SyntaxData::Call { args, callee } = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
-        if self.in_prepass {
-            return true;
+        if hints.get_flag(EmitterFlag::PrepassVars) {
+            return hints;
         }
 
-        if self.in_simplicity_check {
-            let _ = self.emit_node(src_text, callee, ast);
+        if hints.get_flag(EmitterFlag::CheckFnIsSimple) {
+            let _ = self.emit_node(src_text, callee, ast, hints);
 
-            return true;
+            return hints;
         } 
 
         // ! FIXME: when methods are supported, use Dup2 after these.
-
-        if !self.emit_node(src_text, callee, ast) {
-            return false;
+        if !self.emit_node(src_text, callee, ast, hints).check_ok() {
+            return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
         let arg_count = args.len() as i32;
 
         for (arg_pos, arg_expr) in args.iter().enumerate() {
-            if !self.emit_node(src_text, arg_expr, ast) {
+            if !self.emit_node(src_text, arg_expr, ast, hints).check_ok() {
                 eprintln!("\n\tNote: see argument-expr #{arg_pos} in call ~ line {}", self.line);
-                return false;
+                return hints.without_flag(EmitterFlag::IsVisitOK);
             }
         }
 
-        if self.in_construction {
+        if hints.get_flag(EmitterFlag::InConstruction) {
             self.emit_unary_inst(Opcode::CallCtor, arg_count, 0);
         } else {
             self.emit_unary_inst(Opcode::Call, arg_count, 0);
         }
 
-        true
+        hints
     }
 
     #[allow(unused)]
-    fn emit_func_decl(&mut self, src_text: &str, node: &SyntaxData, ast: &AST) -> bool {
-        if self.in_prepass {
-            return true;
+    fn emit_func_decl(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        if hints.get_flag(EmitterFlag::PrepassVars) {
+            return hints;
         }
 
-        if self.in_simplicity_check {
-            return true;
+        if hints.get_flag(EmitterFlag::IsFuncSimple) {
+            return hints;
         }
 
         // ? Steps:
         // ? 1. Skip if prepass.
-        // ? 2. Push scope and map param names! 
-        // ? 3. Generate body: simplicity check, prepass, generate!
+        // ? 2. Push scope and map param names!
+        // ? 3. Generate body: simplicity check, prepass, generate! Flags, if the name is in the set of capturing functions' names, will have simple-func flag = OFF.
         // ? 4. Put chunk into preloaded function object in heap.
         // ? 5. Exit scope!
 
-        false // todo: implement LATER!
+        hints.without_flag(EmitterFlag::IsVisitOK)
     }
 
-    fn emit_block(&mut self, src_text: &str, node: &SyntaxData, ast: &AST) -> bool {
-        let SyntaxData::Block {stmts} = node else { return false; };
+    fn emit_block(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        let SyntaxData::Block {stmts} = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
-        if self.in_prepass {
-            return true;
+        if hints.get_flag(EmitterFlag::PrepassVars) {
+            return hints;
         }
 
-        {
-            #[allow(unused)]
-            let guard_block_prepass = ValueGuard::<bool>::new(std::ptr::from_mut(&mut self.in_prepass), true);
 
-            for (stmt_pos, stmt_node) in stmts.iter().enumerate() {
-                if !self.emit_node(src_text, stmt_node, ast) {
-                    eprintln!("\n\tNote (block prepass): See statement #{stmt_pos} in block ~ line {}", self.line);
-                    return false;
-                }
+        for (stmt_pos, stmt_node) in stmts.iter().enumerate() {
+            if !self.emit_node(src_text, stmt_node, ast, hints.with_flag(EmitterFlag::PrepassVars)).check_ok() {
+                eprintln!("\n\tNote (block prepass): See statement #{stmt_pos} in block ~ line {}", self.line);
+                return hints.without_flag(EmitterFlag::IsVisitOK);
             }
         }
 
-        {
-            #[allow(unused)]
-            let guard_block_not_prepass = ValueGuard::<bool>::new(std::ptr::from_mut(&mut self.in_prepass), false);
-
-            for (stmt_pos_2, stmt_node_2) in stmts.iter().enumerate() {
-                if !self.emit_node(src_text, stmt_node_2, ast) {
-                    eprintln!("\n\tNote (block emission): See statement #{stmt_pos_2} in block ~ line {}", self.line);
-                    return false;
-                }
+        for (stmt_pos_2, stmt_node_2) in stmts.iter().enumerate() {
+            if !self.emit_node(src_text, stmt_node_2, ast, hints.without_flag(EmitterFlag::PrepassVars)).check_ok() {
+                eprintln!("\n\tNote (block emission): See statement #{stmt_pos_2} in block ~ line {}", self.line);
+                return hints.without_flag(EmitterFlag::IsVisitOK);
             }
         }
 
-        true
+        hints
     }
 
-    fn emit_vars(&mut self, src_text: &str, node: &SyntaxData, ast: &AST) -> bool {
-        let SyntaxData::Vars { vars } = node else { return false; };
+    fn emit_vars(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        let SyntaxData::Vars { vars } = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
-        if self.in_prepass {
+        if hints.get_flag(EmitterFlag::PrepassVars) {
             for (var_name_tk_pos, _) in vars.iter() {
                 let name_lexeme = ast.tokens[*var_name_tk_pos].to_str(src_text);
 
-                if self.is_func_simple {
+                if hints.get_flag(EmitterFlag::IsFuncSimple) {
                     let _ = self.record_local(name_lexeme);
                 } else {
                     let _ = self.record_global_string(name_lexeme, true);
@@ -874,21 +896,21 @@ impl Emitter {
                 self.local_reserve_n += 1;
             }
 
-            return true;
+            return hints;
         }
 
-        if self.in_simplicity_check {
+        if hints.get_flag(EmitterFlag::CheckFnIsSimple) {
             for (_, var_init_expr_2) in vars.iter() {
-                let _ = self.emit_node(src_text, var_init_expr_2.as_ref().expect("Expected variable node in emitter.rs ~ line#880.").as_ref(), ast);
+                let _ = self.emit_node(src_text, var_init_expr_2.as_ref().expect("Expected variable node in emitter.rs ~ line#880.").as_ref(), ast, hints);
             }
 
-            return true;
+            return hints;
         }
 
-        if self.is_func_simple {
+        if hints.get_flag(EmitterFlag::IsFuncSimple) {
             for (var_name_tk_pos_2, var_init_expr_2) in vars.iter() {
-                if !self.emit_node(src_text, var_init_expr_2.as_ref().expect("Expected variable node in emitter.rs ~ line#888.").as_ref(), ast) {
-                    return false;
+                if !self.emit_node(src_text, var_init_expr_2.as_ref().expect("Expected variable node in emitter.rs ~ line#888.").as_ref(), ast, hints).check_ok() {
+                    return hints.without_flag(EmitterFlag::IsVisitOK);
                 }
 
                 let local_name = ast.tokens[*var_name_tk_pos_2].to_str(src_text);
@@ -908,9 +930,9 @@ impl Emitter {
                 self.emit_unary_inst(Opcode::PushStr, local_str_id.id, 0);
 
                 if let Some(var_initializer) = var_init_expr_2 {
-                    if !self.emit_node(src_text, var_initializer, ast) {
+                    if !self.emit_node(src_text, var_initializer, ast, hints).check_ok() {
                         eprintln!("Error: variable name {local_key_name} lacks a valid initializer.");
-                        return false;
+                        return hints.without_flag(EmitterFlag::IsVisitOK);
                     }
                 } else {
                     self.emit_nonary_inst(Opcode::PushUndef, 0);
@@ -921,70 +943,70 @@ impl Emitter {
             }
         }
 
-        true
+        hints
     }
 
     #[allow(unused)]
-    fn emit_ifs(&mut self, src_text: &str, node: &SyntaxData, ast: &AST) -> bool {
-        let SyntaxData::Ifs {cond, t_block, f_block} = node else { return false; };
+    fn emit_ifs(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        let SyntaxData::Ifs {cond, t_block, f_block} = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
-        if self.in_simplicity_check || self.in_prepass {
-            let _ = self.emit_node(src_text, t_block, ast);
-            let _ = self.emit_node(src_text, f_block, ast);
+        if hints.get_flag(EmitterFlag::PrepassVars) || hints.get_flag(EmitterFlag::CheckFnIsSimple) {
+            let _ = self.emit_node(src_text, t_block, ast, hints);
+            let _ = self.emit_node(src_text, f_block, ast, hints);
 
-            return true;
+            return hints;
         }
 
-        if !self.emit_node(src_text, cond, ast) {
+        if !self.emit_node(src_text, cond, ast, hints).check_ok() {
             eprintln!("if-stmt condition expr is invalid!");
-            return false;
+            return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
         let skip_t_block_pos = self.emit_unary_inst(Opcode::JumpElse, 0, 1);
 
-        if !self.emit_node(src_text, t_block, ast) {
-            return false;
+        if !self.emit_node(src_text, t_block, ast, hints).check_ok() {
+            return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
         if f_block.is_empty_stmt() {
             let early_end_pos = self.emit_nonary_inst(Opcode::PopN, 1);
 
             self.chunks.last_mut().expect("Expected available chunk for emitting to in non-else if-stmt; emitter.rs ~ line#851.").code[skip_t_block_pos as usize].arg = early_end_pos - skip_t_block_pos;
-            return true;
+            return hints;
         }
 
         let skip_f_block_pos = self.emit_unary_inst(Opcode::Jump, 0, 0);
         self.chunks.last_mut().expect("Expected available chunk for emitting to in else clause; emitter.rs ~ line#955.").code[skip_t_block_pos as usize].arg = skip_f_block_pos + 1 - skip_t_block_pos;
 
-        if !self.emit_node(src_text, f_block, ast) {
-            return false;
+        if !self.emit_node(src_text, f_block, ast, hints).check_ok() {
+            return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
         let end_if_else_pos = self.chunks.last().expect("Expected available chunk at emitter.rs ~ line#961.").code.len() as i32;
         self.chunks.last_mut().expect("Expected available chunk for emitting to after if-else-stmt; emitter.rs ~ line#962.").code[skip_f_block_pos as usize].arg = end_if_else_pos - skip_f_block_pos;
 
-        true
+        hints
     }
 
     #[allow(unused)]
-    fn emit_while(&mut self, src_text: &str, node: &SyntaxData, ast: &AST) -> bool {
-        let SyntaxData::While { cond, body } = node else { return false; };
+    fn emit_while(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        let SyntaxData::While { cond, body } = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
-        if self.in_simplicity_check || self.in_prepass {
-            let _ = self.emit_node(src_text, body, ast);
-            return true;
+        if hints.get_flag(EmitterFlag::PrepassVars) || hints.get_flag(EmitterFlag::CheckFnIsSimple) {
+            let _ = self.emit_node(src_text, body, ast, hints);
+            return hints;
         }
 
         let loop_check_ip = self.chunks.last().expect("Expected available chunk at emitter.rs ~ line#971.").code.len() as i32;
-        if !self.emit_node(src_text, cond, ast) {
-            return false;
+        if !self.emit_node(src_text, cond, ast, hints).check_ok() {
+            return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
         let loop_exit_jump_ip = self.chunks.last().expect("Expected available chunk at emitter.rs ~ line#976.").code.len() as i32;
         self.emit_unary_inst(Opcode::JumpElse, 0, 0);
 
-        if !self.emit_node(src_text, body, ast) {
-            return false;
+        if !self.emit_node(src_text, body, ast, hints).check_ok() {
+            return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
         let loop_repeat_jump_ip = self.chunks.last().expect("Expected available chunk at emitter.rs ~ line#983.").code.len() as i32;
@@ -994,110 +1016,106 @@ impl Emitter {
         self.emit_unary_inst(Opcode::PopN, 0, 1);
         self.chunks.last_mut().expect("Expected available chunk for emitting to after if-else-stmt; emitter.rs ~ line#987.").code[loop_exit_jump_ip as usize].arg = loop_end_ip - loop_exit_jump_ip;
 
-        true
+        hints
     }
 
     #[allow(unused)]
-    fn emit_c_like_for(&mut self, src_text: &str, node: &SyntaxData, ast: &AST) -> bool {
-        false // todo: implement LATER!
+    fn emit_c_like_for(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        hints.without_flag(EmitterFlag::IsVisitOK)
     }
 
     #[allow(unused)]
-    fn emit_break(&mut self, src_text: &str, node: &SyntaxData, ast: &AST) -> bool {
-        false // todo: implement LATER!
+    fn emit_break(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        hints.without_flag(EmitterFlag::IsVisitOK) // todo: implement LATER!
     }
 
     #[allow(unused)]
-    fn emit_continue(&mut self, src_text: &str, node: &SyntaxData, ast: &AST) -> bool {
-        false // todo: implement LATER!
+    fn emit_continue(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        hints.without_flag(EmitterFlag::IsVisitOK) // todo: implement LATER!
     }
 
-    fn emit_return(&mut self, src_text: &str, node: &SyntaxData, ast: &AST) -> bool {
-        let SyntaxData::Return { out } = node else { return false; };
+    fn emit_return(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        let SyntaxData::Return { out } = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
-        if self.in_prepass || self.in_simplicity_check {
-            return true;
+        if hints.get_flag(EmitterFlag::PrepassVars) || hints.get_flag(EmitterFlag::CheckFnIsSimple) {
+            return hints;
         }
 
-        if !self.emit_node(src_text, out, ast) {
-            return false;
+        if !self.emit_node(src_text, out, ast, hints.without_flag(EmitterFlag::InLocator)).check_ok() {
+            return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
         self.emit_nonary_inst(Opcode::Ret, 0);
 
-        true
+        hints
     }
 
-    fn emit_expr_stmt(&mut self, src_text: &str, node: &SyntaxData, ast: &AST) -> bool {
-        let SyntaxData::ExprStmt { inner } = node else { return false; };
+    fn emit_expr_stmt(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        let SyntaxData::ExprStmt { inner } = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
-        if self.in_prepass || self.in_simplicity_check {
-            return true;
+        if hints.get_flag(EmitterFlag::PrepassVars) || hints.get_flag(EmitterFlag::CheckFnIsSimple) {
+            return hints;
         }
 
-        self.emit_node(src_text, inner, ast)
+        self.emit_node(src_text, inner, ast, hints.without_flag(EmitterFlag::InLocator))
     }
 
-    fn emit_empty_stmt(&mut self, _: &str, _: &SyntaxData, _: &AST) -> bool {
-        true
+    fn emit_empty_stmt(&mut self, _: &str, _: &SyntaxData, _: &AST, hints: EmitterHints) -> EmitterHints {
+        hints
     }
 
-    // todo
-    fn emit_node(&mut self, src_text: &str, node: &SyntaxNode, ast: &AST) -> bool {
+    fn emit_node(&mut self, src_text: &str, node: &SyntaxNode, ast: &AST, hints: EmitterHints) -> EmitterHints {
         let node_data = &node.data;
 
         match node_data {
-            SyntaxData::Nil => self.emit_nil_node(src_text, node_data, ast),
-            SyntaxData::Literal(_) => self.emit_literal(src_text, node_data, ast),
-            // SyntaxData::ObjectExpr { .. } => self.emit_object_expr(src_text, node_data, ast),
-            SyntaxData::ArrayExpr { .. } => self.emit_array_expr(src_text, node_data, ast),
-            // SyntaxData::Lambda { .. } => self.emit_object_expr(src_text, node_data, ast),
-            SyntaxData::Lhs { .. } => self.emit_lhs(src_text, node_data, ast),
-            SyntaxData::Unary { .. } => self.emit_unary(src_text, node_data, ast),
-            SyntaxData::Binary { .. } => self.emit_binary(src_text, node_data, ast),
-            SyntaxData::Assign { .. } => self.emit_assign(src_text, node_data, ast),
-            SyntaxData::Call { .. } => self.emit_call(src_text, node_data, ast),
-            SyntaxData::FuncDecl { .. } => self.emit_func_decl(src_text, node_data, ast),
-            SyntaxData::Block { .. } => self.emit_block(src_text, node_data, ast),
-            SyntaxData::Vars { .. } => self.emit_vars(src_text, node_data, ast),
-            SyntaxData::Ifs { .. } => self.emit_ifs(src_text, node_data, ast),
-            SyntaxData::While { .. } => self.emit_while(src_text, node_data, ast),
-            // SyntaxData::CLikeFor { .. } => self.emit_c_like_for(src_text, node_data, ast),
-            // SyntaxData::Break { .. } => self.emit_break(src_text, node_data, ast),
-            // SyntaxData::Continue { .. } => self.emit_continue(src_text, node_data, ast),
-            SyntaxData::Return { .. } => self.emit_return(src_text, node_data, ast),
-            SyntaxData::ExprStmt { .. } => self.emit_expr_stmt(src_text, node_data, ast),
-            SyntaxData::EmptyStmt { .. } => self.emit_empty_stmt(src_text, node_data, ast),
-            _ => false,
+            SyntaxData::Nil => self.emit_nil_node(src_text, node_data, ast, hints),
+            SyntaxData::Literal(_) => self.emit_literal(src_text, node_data, ast, hints),
+            // SyntaxData::ObjectExpr { .. } => self.emit_object_expr(src_text, node_data, ast, hints),
+            SyntaxData::ArrayExpr { .. } => self.emit_array_expr(src_text, node_data, ast, hints),
+            // SyntaxData::Lambda { .. } => self.emit_object_expr(src_text, node_data, ast, hints),
+            SyntaxData::Lhs { .. } => self.emit_lhs(src_text, node_data, ast, hints),
+            SyntaxData::Unary { .. } => self.emit_unary(src_text, node_data, ast, hints),
+            SyntaxData::Binary { .. } => self.emit_binary(src_text, node_data, ast, hints),
+            SyntaxData::Assign { .. } => self.emit_assign(src_text, node_data, ast, hints),
+            SyntaxData::Call { .. } => self.emit_call(src_text, node_data, ast, hints),
+            SyntaxData::FuncDecl { .. } => self.emit_func_decl(src_text, node_data, ast, hints),
+            SyntaxData::Block { .. } => self.emit_block(src_text, node_data, ast, hints),
+            SyntaxData::Vars { .. } => self.emit_vars(src_text, node_data, ast, hints),
+            SyntaxData::Ifs { .. } => self.emit_ifs(src_text, node_data, ast, hints),
+            SyntaxData::While { .. } => self.emit_while(src_text, node_data, ast, hints),
+            // SyntaxData::CLikeFor { .. } => self.emit_c_like_for(src_text, node_data, ast, hints),
+            // SyntaxData::Break { .. } => self.emit_break(src_text, node_data, ast, hints),
+            // SyntaxData::Continue { .. } => self.emit_continue(src_text, node_data, ast, hints),
+            SyntaxData::Return { .. } => self.emit_return(src_text, node_data, ast, hints),
+            SyntaxData::ExprStmt { .. } => self.emit_expr_stmt(src_text, node_data, ast, hints),
+            SyntaxData::EmptyStmt { .. } => self.emit_empty_stmt(src_text, node_data, ast, hints),
+            _ => {
+                eprintln!("Syntax at line {} is unsupported.", self.line);
+                hints.without_flag(EmitterFlag::IsVisitOK)
+            },
         }
     }
 
     pub fn emit_code(&mut self, ast: &AST) -> Option<Program> {
         let AST {txt, decls, name, ..} = ast;
 
-        {
-            #[allow(unused)]
-            let guard_prepass = ValueGuard::<bool>::new(std::ptr::from_mut(&mut self.in_prepass), true);
+        let initial_hints = EmitterHints::default().with_flag(EmitterFlag::IsVisitOK);
 
-            for (decl_pos, decl_stmt) in decls.iter().enumerate() {
-                if !self.emit_node(txt.as_str(), decl_stmt, ast) {
-                    eprintln!("\n\tNote (check pass): See invalid declaration #{decl_pos}.");
-                    return None;
-                }
+        for (decl_pos, decl_stmt) in decls.iter().enumerate() {
+            if !self.emit_node(txt.as_str(), decl_stmt, ast, initial_hints.with_flag(EmitterFlag::PrepassVars)).check_ok() {
+                eprintln!("\n\tNote (check pass): See invalid declaration #{decl_pos}.");
+                return None;
             }
         }
 
-        {
-            #[allow(unused)]
-            let guard_prepass = ValueGuard::<bool>::new(std::ptr::from_mut(&mut self.in_prepass), false);
-
-            for (decl_pos, decl_stmt) in decls.iter().enumerate() {
-                if !self.emit_node(txt.as_str(), decl_stmt, ast) {
-                    eprintln!("\n\tNote (emit pass): See invalid declaration #{decl_pos} at line {}.", self.line);
-                    return None;
-                }
+        for (decl_pos, decl_stmt) in decls.iter().enumerate() {
+            if !self.emit_node(txt.as_str(), decl_stmt, ast, initial_hints).check_ok() {
+                eprintln!("\n\tNote (emit pass): See invalid declaration #{decl_pos} at line {}.", self.line);
+                return None;
             }
         }
+
+        self.emit_nonary_inst(Opcode::Ret, 0);
 
         Some(Program {
             heap: std::mem::take(&mut self.heap),

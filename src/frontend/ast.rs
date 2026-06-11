@@ -139,7 +139,7 @@ pub enum SyntaxData {
 }
 
 impl SyntaxData {
-    pub fn get_emitter_id(self) -> SyntaxId {
+    pub fn get_emitter_id(&self) -> SyntaxId {
         match self {
             Self::Nil => SyntaxId::Nil,
             Self::Literal(_) => SyntaxId::Literal,
