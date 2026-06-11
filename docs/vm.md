@@ -70,6 +70,10 @@ End call:
  - DIV
  - ADD
  - SUB
+ - BT_FLIP
+ - BT_AND
+ - BT_OR
+ - BT_XOR
  - STRICT_EQ
  - STRICT_NE
  - LOOSE_EQ

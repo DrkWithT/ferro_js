@@ -2,10 +2,12 @@
 
 #### v0.1.0
  - Support more JS operators, including prefix, postfix, bitwise, and logical ops.
-    - Prefix and postfix: **WIP**
+    - Prefix and postfix: **OK (props todo)**
         - prefix first for `++` and `--`
         - postfix after prefix versions
-    - Bitwise: **TODO**
+    - Bitwise: **WIP**
+        - Grammar 1: `unary -> ("~" | ...) inner`
+        - Grammar 2: `equality & equality` -> `bitand ^ bitand` -> `bitxor | bitxor`
         - `~` and `!` --> unary rule
         - `&`, `|`, `^` --> rule between equality and logical
     - Logical operators `&&`, `||`, `!` **TODO**
