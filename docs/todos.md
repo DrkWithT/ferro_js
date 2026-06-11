@@ -2,15 +2,15 @@
 
 #### v0.1.0
  - Support more JS operators, including prefix, postfix, bitwise, and logical ops.
-    - Prefix and postfix:
+    - Prefix and postfix: **WIP**
         - prefix first for `++` and `--`
         - postfix after prefix versions
-    - Bitwise:
+    - Bitwise: **TODO**
         - `~` and `!` --> unary rule
         - `&`, `|`, `^` --> rule between equality and logical
-    - Logical operators `&&`, `||`, `!`
+    - Logical operators `&&`, `||`, `!` **TODO**
         - `&&` or `||` will short circuit evaluate LHS and/or RHS, possibly not boolean
-    - Add loose equality:
+    - Add loose equality: **TODO**
         - IF same types:
             - undefined or null on either side => true
             - boolean => direct comparison
@@ -22,7 +22,7 @@
             - string on either side vs. number => coerce any string to number and compare
             - object on either side vs. number or string => coerce objects to primitive number or string and compare
             - ... => false
-    - Add `void`, `typeof`, `delete`
+    - Add ~~`void`~~, `typeof`, `delete` **WIP**
  - Support compound assignment ops: `*=`, `/=`, `+=`, `-=`
  - Support more control flow: `while`, C-style `for`, `switch`
  - Support special impl attributes in global object properties: `IsDecl` must be checked on `delete`.
@@ -33,4 +33,5 @@
  - Support array (native object with array prototype)
  - Support array literals.
  - Support array prototype methods except `sort` and locales.
- - Support built-in `Date` object with prototype.
+ - Support built-in `Date`, `Math`.
+ - Support built-in `Array`, `Object`.

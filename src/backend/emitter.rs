@@ -4,7 +4,7 @@ use std::cell::{Cell/*, RefCell*/};
 
 use crate::frontend::{
     token::{TokenKind, Token},
-    ast::{Operator, /*SyntaxId,*/ SyntaxData, SyntaxNode, AST},
+    ast::{Operator, SyntaxId, SyntaxData, SyntaxNode, AST},
 };
 
 use crate::runtime::code::InlineCache;
@@ -79,8 +79,10 @@ pub enum EmitterFlag {
     InConstruction = (1 << 5),
     /// Are the function's variable semantics simple, specifically not requiring an environment object?
     IsFuncSimple = (1 << 6),
+    /// Does the bytecode generation have to consider `++target` or `target++`?
+    HandleUnarySpecials = (1 << 7),
     /// Has the sub-AST compilation succeeded?
-    IsVisitOK = (1 << 7),
+    IsVisitOK = (1 << 8),
 }
 
 #[derive(Default, Clone, Copy)]
@@ -149,7 +151,7 @@ impl Emitter {
         let next_ic_id = self.chunks.last().expect("Expected available chunk at emitter.rs ~ line#154.").icaches.len() as u16;
 
         self.chunks.last_mut().unwrap().icaches.push(InlineCache::default());
-        self.chunks.last_mut().unwrap().code[inst_pos as usize].flags = next_ic_id;
+        self.chunks.last_mut().unwrap().code[inst_pos as usize].flags |= next_ic_id;
     }
 
     fn emit_nonary_inst(&mut self, op: Opcode, flags: u16) -> i32 {
@@ -305,11 +307,12 @@ impl Emitter {
 
         let name_in_locator = hints.get_flag(EmitterFlag::InLocator);
         let name_in_access = hints.get_flag(EmitterFlag::InAccess);
-        let name_needs_env = hints.get_flag(EmitterFlag::IsFuncSimple) && self.scopes.len() != 1;
+        let name_lacks_env = hints.get_flag(EmitterFlag::IsFuncSimple) && self.scopes.len() != 1;
+        let needs_special_updating = hints.get_flag(EmitterFlag::HandleUnarySpecials);
 
-        let name_info = if !name_in_locator && !name_in_access && !name_needs_env {
+        let name_info = if !name_in_locator && !name_in_access && !name_lacks_env {
             let Some(var_key_info) = self.resolve_global_string(lexeme, true) else { eprintln!("Could not resolve env-var name '{lexeme}' here."); return hints.without_flag(EmitterFlag::IsVisitOK); };
-            
+
             self.emit_unary_inst(Opcode::PushStr, var_key_info.id, 0);
 
             let env_access_ip = self.emit_nonary_inst(Opcode::GetVar, 0);
@@ -320,45 +323,44 @@ impl Emitter {
                 Opcode::Ret,
                 false, // Continue-generation flag: If off, exit this function early.
             )
-        } else if !name_in_locator && !name_in_access && name_needs_env {
+        } else if !name_in_locator && !name_in_access && name_lacks_env {  // ! add missing case for "in_locator" for simple, stack-offset local names...
             self.capturing_names.insert(lexeme.to_owned());
             (
                 self.resolve_local(lexeme).or_else(|| {
                     self.resolve_global(lexeme)
                 }),
                 Opcode::GetLocal,
-                true,
+                !needs_special_updating,
             )
-        } else if !name_in_locator && name_in_access && !name_needs_env {
+        } else if !name_in_locator && name_in_access && !name_lacks_env {
             (
                 self.resolve_global_string(lexeme, true).or_else(|| {
                     self.record_global_string(lexeme, true)
                 }),
                 Opcode::PushStr,
-                true,
+                !needs_special_updating,
             )
-        } else if name_in_locator && !name_in_access && !name_needs_env {
+        } else if name_in_locator && !name_in_access && !name_lacks_env {
             // ? Skip emission of LHS for assignment exprs to prevent a messy stack situation... Just put its environment object key.
             (
                 self.resolve_global_string(lexeme, true).or_else(|| {
                     self.record_global_string(lexeme, true)
                 }),
                 Opcode::PushStr,
-                true,
+                !needs_special_updating,
             )
-        } else { // ! add missing case for "in_locator" for simple, stack-offset local names...
+        } else {
+            eprintln!("\n\tNote: unhandled type of named-expr at ~ line#{}", self.line);
             (
                 None,
                 Opcode::Ret,
-                true,
+                false,
             )
         };
         
         self.cached_info = name_info.0;
-        // println!("cached_info in emit_name(...):");
-        // dbg!(self.cached_info, self.in_simplicity_check, self.in_prepass, self.in_locator);
 
-        if name_info.2 {   
+        if name_info.2 {
             let name_opcode = name_info.1;
             let Some(named_info) = self.cached_info else { return hints.without_flag(EmitterFlag::IsVisitOK); };
             
@@ -466,6 +468,10 @@ impl Emitter {
                     hints.without_flag(EmitterFlag::IsVisitOK)
                 }
             },
+            TokenKind::KeywordThis => {
+                self.emit_nonary_inst(Opcode::PushThisRef, 0);
+                hints
+            },
             TokenKind::Identifier => self.emit_name(literal_lexeme, hints),
             _ => {
                 hints.without_flag(EmitterFlag::IsVisitOK)
@@ -540,29 +546,19 @@ impl Emitter {
             return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
-        let access_count = accesses.len();
-
         for (access_pos, (access_direct, access_expr)) in accesses.iter().enumerate() {            
-            {
-                if !self.emit_node(src_text, access_expr, ast, hints.with_flag(EmitterFlag::InLocator)).check_ok() {
-                    eprintln!("\n\tNote: check LHS {0} access #{access_pos} around line {1}.", if *access_direct {"[key]"} else {"'.'"}, self.line);
-                    return hints.without_flag(EmitterFlag::IsVisitOK);
-                }
+            if !self.emit_node(src_text, access_expr, ast, hints.without_flag(EmitterFlag::InLocator)).check_ok() {
+                eprintln!("\n\tNote: check LHS {0} access #{access_pos} around line {1}.", if *access_direct {"[key]"} else {"'.'"}, self.line);
+                return hints.without_flag(EmitterFlag::IsVisitOK);
             }
 
-            if access_pos == access_count - 1 {
-                if hints.get_flag(EmitterFlag::InLocator) {
-                    // ? Leave the last emitted key for LHS accesses, as there's SET_PROP VM opcodes that require that temporary value!
-                    break;
-                } else {
-                    let get_prop_ip = self.emit_nonary_inst(Opcode::GetProp, 0);
-
-                    self.put_ic_of_inst(get_prop_ip);
-                }
-            } else {
+            // ? Leave the last emitted key for LHS accesses, as there's SET_PROP VM opcodes that require that temporary value!
+            if !hints.get_flag(EmitterFlag::InLocator) {
                 let get_prop_ip = self.emit_nonary_inst(Opcode::GetProp, 0);
 
                 self.put_ic_of_inst(get_prop_ip);
+            } else {
+                break;
             }
         }
 
@@ -583,9 +579,13 @@ impl Emitter {
         }
 
         #[allow(unused)]
-        let (temp_opcode, op_is_prefix) = match op {
+        let (mut temp_opcode, op_is_prefix) = match op {
             Operator::NegBool => (
                 Some(Opcode::ForceBool),
+                true
+            ),
+            Operator::NegNum => (
+                Some(Opcode::NegNum),
                 true
             ),
             Operator::ForceNum => (
@@ -593,21 +593,27 @@ impl Emitter {
                 true
             ),
             Operator::Inc => (
-                // match inner.data.get_emitter_id() {
-                //     SyntaxId::Literal => Some(Opcode::IncLocal),
-                //     SyntaxId::Lhs => Some(Opcode::IncProp),
-                //     _ => None
-                // }, // todo
-                None,
+                match inner.data.get_emitter_id() {
+                    SyntaxId::Literal => Some(if hints.get_flag(EmitterFlag::IsFuncSimple) {
+                        Opcode::IncLocal
+                    } else {
+                        Opcode::IncProp
+                    }),
+                    SyntaxId::Lhs => Some(Opcode::IncProp),
+                    _ => None
+                },
                 *prefix
             ),
             Operator::Dec => (
-                // match inner.data.get_emitter_id() {
-                //     SyntaxId::Literal => Some(Opcode::DecLocal),
-                //     SyntaxId::Lhs => Some(Opcode::DecProp),
-                //     _ => None
-                // }, // todo
-                None,
+                match inner.data.get_emitter_id() {
+                    SyntaxId::Literal => Some(if hints.get_flag(EmitterFlag::IsFuncSimple) {
+                        Opcode::DecLocal
+                    } else {
+                        Opcode::DecProp
+                    }),
+                    SyntaxId::Lhs => Some(Opcode::DecProp),
+                    _ => None
+                },
                 *prefix
             ),
             Operator::Delete => (
@@ -627,29 +633,50 @@ impl Emitter {
         }
 
         let handle_new_unary = *op == Operator::New;
+        let handle_special_unary = matches!(*op, Operator::Inc | Operator::Dec);
 
         if !self.emit_node(src_text, inner, ast,
-            if handle_new_unary { hints.with_flag(EmitterFlag::InConstruction) } else { hints }
+            if handle_new_unary {
+                hints.with_flag(EmitterFlag::InConstruction)
+            } else if handle_special_unary {
+                hints.with_flag(EmitterFlag::HandleUnarySpecials).with_flag(EmitterFlag::InLocator)
+            } else { hints }
         ).check_ok() {
             return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
+        let Some(temp_opcode_v) = temp_opcode else { return hints.without_flag(EmitterFlag::IsVisitOK); };
+
         if handle_new_unary {
+            // ! ctor calls are handled by emit_call()
+            return hints;
+        } else if handle_special_unary && self.cached_info.is_some() {
+            let SymbolInfo { id, tag } = self.cached_info.unwrap();
+
+            if self.scopes.len() == 1 {
+                // ! In top-level code, the global env is globalThis -- Account for that as the target object here...
+                self.emit_nonary_inst(Opcode::PushThisRef, 0);
+            }
+
+            let temp_op_arg = match tag {
+                SymbolTag::Local => id,
+                SymbolTag::KeyStr => id,
+                _ => 0,
+            };
+
+            // ! prefix ++ or -- of any expr are handled specially since old/new values are discarded!
+            let unary_op_ip = self.emit_unary_inst(
+                temp_opcode_v,
+                temp_op_arg,
+                if *prefix {1 << 15} else {0}
+            ); // ? prefix mode is an opcode flag, as adding more opcodes for this small case would be overkill.
+
+            self.put_ic_of_inst(unary_op_ip);
+
             return hints;
         }
 
-        let opcode_opt = match op {
-            Operator::NegBool => Some(Opcode::NegBool),
-            Operator::NegNum => Some(Opcode::NegNum),
-            Operator::Void => Some(Opcode::Discard),
-            _ => None,
-        };
-
-        if opcode_opt.is_none() {
-            return hints.without_flag(EmitterFlag::IsVisitOK);
-        }
-
-        self.emit_nonary_inst(opcode_opt.expect("Expected opcode to be of prefix unary '-' in emitter.rs ~ line#570."), 0);
+        self.emit_nonary_inst(temp_opcode_v, if *prefix {1} else {0});
 
         hints
     }
@@ -670,7 +697,7 @@ impl Emitter {
         }
 
         // TODO: implement logical && , || generation.
-        // if !self.emit_logical_juncts(src_text, l, r, ast) { return false; }
+        // if !self.emit_logical_juncts(src_text, l, r, ast) { return hints.without_flag(EmitterFlag::IsVisitOK); }
 
         struct DirOp {
             pub is_ltr: bool,
@@ -909,7 +936,7 @@ impl Emitter {
 
         if hints.get_flag(EmitterFlag::IsFuncSimple) {
             for (var_name_tk_pos_2, var_init_expr_2) in vars.iter() {
-                if !self.emit_node(src_text, var_init_expr_2.as_ref().expect("Expected variable node in emitter.rs ~ line#888.").as_ref(), ast, hints).check_ok() {
+                if !self.emit_node(src_text, var_init_expr_2.as_ref().expect("Expected variable node in emitter.rs ~ line#888.").as_ref(), ast, hints.without_flag(EmitterFlag::InLocator)).check_ok() {
                     return hints.without_flag(EmitterFlag::IsVisitOK);
                 }
 
@@ -930,7 +957,7 @@ impl Emitter {
                 self.emit_unary_inst(Opcode::PushStr, local_str_id.id, 0);
 
                 if let Some(var_initializer) = var_init_expr_2 {
-                    if !self.emit_node(src_text, var_initializer, ast, hints).check_ok() {
+                    if !self.emit_node(src_text, var_initializer, ast, hints.without_flag(EmitterFlag::InLocator)).check_ok() {
                         eprintln!("Error: variable name {local_key_name} lacks a valid initializer.");
                         return hints.without_flag(EmitterFlag::IsVisitOK);
                     }
@@ -969,7 +996,7 @@ impl Emitter {
         }
 
         if f_block.is_empty_stmt() {
-            let early_end_pos = self.emit_nonary_inst(Opcode::PopN, 1);
+            let early_end_pos = self.chunks.last().unwrap().code.len() as i32;
 
             self.chunks.last_mut().expect("Expected available chunk for emitting to in non-else if-stmt; emitter.rs ~ line#851.").code[skip_t_block_pos as usize].arg = early_end_pos - skip_t_block_pos;
             return hints;
