@@ -44,7 +44,7 @@ pub struct CallFrame {
     ///  - 1: Holds a new object environment upon ctor calls.
     ///  - 2: Holds a custom `this` Value from `Function.call()`.
     ///  - 3: If `use strict` applies, do not coerce `this` to globalThis. Otherwise, do so.
-    pub this_p: *mut JSObjectWrap, // ! FIXME: use JSValue instead to simplify property accesses later with object-id values + key-value...
+    pub this_p: JSValue, // ! FIXME: use JSValue instead to simplify property accesses later with object-id values + key-value...
     pub callee_p: *mut JSObjectWrap, // ! FIXME: use JSValue
     pub caller_rip: *const Instruction,
     pub caller_cvp: *const JSValue,
@@ -55,7 +55,7 @@ pub struct CallFrame {
 impl Default for CallFrame {
     fn default() -> Self {
         Self {
-            this_p: std::ptr::null_mut(),
+            this_p: JSValue::Undefined,
             callee_p: std::ptr::null_mut(),
             caller_rip: std::ptr::null(),
             caller_cvp: std::ptr::null(),
@@ -99,15 +99,6 @@ impl JSContext {
         let start_icp = program.top_level.icaches.as_mut_ptr();
         let start_cvp = program.top_level.consts.as_ptr();
 
-        let mut first_frame = CallFrame {
-            this_p: std::ptr::null_mut(),
-            callee_p: std::ptr::null_mut(),
-            caller_rip: std::ptr::null(),
-            caller_cvp: start_cvp,
-            caller_bp: 0,
-            callee_bp: 0
-        };
-
         let first_env_id = program.heap.add_item(Some(Rc::new(RefCell::new(JSObjectWrap::Exotic(
             ExoticObject {
                 props: vec![],
@@ -118,7 +109,16 @@ impl JSContext {
             }
         ))))).unwrap();
 
-        first_frame.this_p = program.heap.get_item(first_env_id).unwrap().as_ptr();
+        let mut first_frame = CallFrame {
+            this_p: JSValue::Undefined,
+            callee_p: std::ptr::null_mut(),
+            caller_rip: std::ptr::null(),
+            caller_cvp: start_cvp,
+            caller_bp: 0,
+            callee_bp: 0
+        };
+
+        first_frame.this_p = JSValue::ObjectId(first_env_id);
 
         Self {
             heap: std::mem::take(&mut program.heap),

@@ -188,6 +188,32 @@ impl JSObjectWrap {
         }
     }
 
+    pub fn get_property_data_mut(&mut self, ctx: &mut JSContext, key_id: usize, ic_id: u16) -> Option<&mut JSValue> {
+        let my_data = self.as_object_mut()?;
+        let my_shape_id = my_data.shape;
+
+        let (prop_offset, ic_dirty) = unsafe {
+            if let Some (ic_slot) = ctx.icp.add(ic_id as usize).as_mut().unwrap().find(my_shape_id, key_id) {
+                (Some(ic_slot), false)
+            } else if let Some(slow_prop_ref) = ctx.shapes.fetch(my_shape_id) {
+                (slow_prop_ref.resolve_offset(key_id), true)
+            } else { (None, true) }
+        };
+
+        prop_offset?;
+
+        if ic_dirty {
+            unsafe {
+                ctx.icp.add(ic_id as usize).as_mut_unchecked().update(my_shape_id, key_id, prop_offset.unwrap());
+            }
+        }
+
+        match &mut my_data.props.get_mut(prop_offset.unwrap()).unwrap().body {
+            PropBody::Data(prop_v) => Some(prop_v),
+            _ => None
+        }
+    }
+
     pub fn set_property_data_mut(&mut self, ctx: &mut JSContext, key_id: usize, ic_id: u16, arg: &JSValue) -> bool {
         let Some(my_data) = self.as_object_mut() else { return false; };
         let my_shape_id = my_data.shape;
