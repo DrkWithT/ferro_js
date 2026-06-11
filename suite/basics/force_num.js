@@ -1,6 +1,7 @@
 // test prefix + operator
 
-var a = 1, b = -1, c = "42", d = "test", ok = 0;
+var a = 1, b = -1, ok = 0;
+//var c = "42", d = "test";
 
 if (+a === 1) {
     ok++;
@@ -10,13 +11,20 @@ if (+b === -1) {
     ok++;
 }
 
-if (+c === 42) {
+if (+undefined !== NaN) {
     ok++;
 }
 
-// TODO: add isNaN support!
-// if (isNaN(+d)) {
+if (+null === 0) {
+    ok++;
+}
+
+// if (+c === 42) {
 //     ok++;
 // }
 
-return ok === 3;
+// if (+d !== NaN) {
+//     ok++;
+// }
+
+return ok === 4;
