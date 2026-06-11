@@ -5,9 +5,10 @@
     - Temporary stack
     - Environments stack / chain
     - Completion record stack??
- - Match opcode & loop dispatch for standard Rust support (WORKING)
- - Inline Caches (WIP, experimental)
- - In-place value ops / super-instructions (WIP)
+ - Match opcode & loop dispatch for standard Rust support
+ - String interning
+ - Inline Caches + Shape system
+ - In-place value ops
  - Mark & sweep GC (PLANNED)
 
 #### Call Layout on Stack:
@@ -18,8 +19,8 @@ TEMP STACK, pre-call:
 | ......... | <-- UNFILLED ARGS become UNDEFINED!
 | Value(2)  | <-- STACK[SP]
 | Value(1)  |
-| ref?this  | <-- STACK[CALLEE_BP + 1] is thisArg, defaulted to globalThis.
-| ref(foo)  | <-- STACK[CALLEE_BP] uses CALLEE_BP = SP - (ARGC + 1)
+| ref(foo)  | <-- STACK[CALLEE_BP] uses CALLEE_BP = SP - ARGC
+| ref?this  | <-- STACK[CALLEE_BP - 1] is `thisArg`, defaulted to `globalThis`.
 -----------------
 Begin call:
 1. Load array-like object viewing N temp args to Environment.arguments. A new environment is created if:
@@ -91,8 +92,6 @@ End call:
  - RET_CLOSURE ?
 
 #### Super Opcodes ?
- - MUL_K
- - DIV_K
  - ADD_K
  - SUB_K
  - 
