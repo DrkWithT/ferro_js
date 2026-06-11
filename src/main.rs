@@ -78,8 +78,9 @@ fn main() -> ExitCode {
     tokenizer.map_special_lexical("||", TokenKind::OperatorOr);
     tokenizer.map_special_lexical("=", TokenKind::OperatorAssign);
     tokenizer.map_special_lexical("~", TokenKind::OperatorBitFlip);
-    tokenizer.map_special_lexical("|", TokenKind::OperatorBitOr);
     tokenizer.map_special_lexical("&", TokenKind::OperatorBitAnd);
+    tokenizer.map_special_lexical("^", TokenKind::OperatorBitXor);
+    tokenizer.map_special_lexical("|", TokenKind::OperatorBitOr);
     tokenizer.map_special_lexical("<<", TokenKind::OperatorBShiftLeft);
     tokenizer.map_special_lexical(">>", TokenKind::OperatorBShiftRight);
     tokenizer.map_special_lexical("undefined", TokenKind::LiteralUndefined);

@@ -302,7 +302,7 @@ impl<'source_lt> Lexer<'source_lt> {
                     self.lex_number()
                 } else if self.peeked.is_alphabetic() {
                     self.lex_word(source)
-                } else if matches!(self.peeked, '%' | '*' | '/' | '+' | '-' | '!' | '<' | '>' | '=' | '&' | '|') {
+                } else if matches!(self.peeked, '%' | '*' | '/' | '+' | '-' | '!' | '<' | '>' | '=' | '&' | '|' | '^' | '~') {
                     self.lex_operator(source)
                 } else {
                     self.lex_single(TokenKind::Unknown)
