@@ -202,6 +202,16 @@ impl JSContext {
         }
     }
 
+    pub fn jsvalue_to_boolean(&self, v: &JSValue) -> bool {
+        unsafe {
+            if let Some(sid) = v.get_str_id() {
+                !self.spool.get_item(sid).as_ref().expect("Expected valid, interned string reference in vm.rs ~ jsvalue_to_boolean").as_ptr().as_ref_unchecked().is_empty()
+            } else {
+                v.get_boolean()
+            }
+        }
+    }
+
     /// ### ABOUT
     /// Implements basics of ES6: 7.1.5
     pub fn jsvalue_to_i32(&self, v: &JSValue) -> i32 {

@@ -431,7 +431,7 @@ impl Emitter {
                 }
             },
             TokenKind::LiteralBinInt => {
-                if let Some(num_cid) = self.record_constant(literal_lexeme, JSValue::Number(i32::from_str_radix(literal_lexeme, 2).expect("Unexpected malformed binary int at emitter.rs.") as f64)) {
+                if let Some(num_cid) = self.record_constant(literal_lexeme, JSValue::Number(i32::from_str_radix(&literal_lexeme[2..], 2).expect("Unexpected malformed binary int at emitter.rs.") as f64)) {
                     self.emit_unary_inst(Opcode::PushConst, num_cid.id, 0);
                     hints
                 } else {
@@ -439,7 +439,7 @@ impl Emitter {
                 }
             },
             TokenKind::LiteralHexInt => {
-                if let Some(num_cid) = self.record_constant(literal_lexeme, JSValue::Number(i32::from_str_radix(literal_lexeme, 16).expect("Unexpected malformed hexadecimal int at emitter.rs.") as f64)) {
+                if let Some(num_cid) = self.record_constant(literal_lexeme, JSValue::Number(i32::from_str_radix(&literal_lexeme[2..], 16).expect("Unexpected malformed hexadecimal int at emitter.rs.") as f64)) {
                     self.emit_unary_inst(Opcode::PushConst, num_cid.id, 0);
                     hints
                 } else {
@@ -581,7 +581,7 @@ impl Emitter {
         #[allow(unused)]
         let (mut temp_opcode, op_is_prefix) = match op {
             Operator::NegBool => (
-                Some(Opcode::ForceBool),
+                Some(Opcode::NegBool),
                 true
             ),
             Operator::ForceNum => (
@@ -682,6 +682,39 @@ impl Emitter {
         hints
     }
 
+    fn emit_binary_logical(&mut self, src_text: &str, op: Operator, l: &SyntaxNode, r: &SyntaxNode, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        if hints.get_flag(EmitterFlag::PrepassVars) {
+            return hints;
+        }
+
+        let jumper_opcode = match op {
+            Operator::LogicalAnd => Some(Opcode::JumpElse),
+            Operator::LogicalOr => Some(Opcode::JumpIf),
+            _ => None
+        };
+
+        if jumper_opcode.is_none() {
+            return hints.without_flag(EmitterFlag::IsVisitOK);
+        }
+
+        let jumper_opcode = jumper_opcode.unwrap();
+
+        if !self.emit_node(src_text, l, ast, hints.without_flag(EmitterFlag::InLocator)).check_ok() {
+            return hints.without_flag(EmitterFlag::IsVisitOK);
+        }
+
+        let rhs_skip_ip = self.emit_unary_inst(jumper_opcode, 0, 0);
+
+        if !self.emit_node(src_text, r, ast, hints.without_flag(EmitterFlag::InLocator)).check_ok() {
+            return hints.without_flag(EmitterFlag::IsVisitOK);
+        }
+
+        let end_rhs_skip_ip = self.chunks.last().unwrap().code.len() as i32;
+        self.chunks.last_mut().unwrap().code.get_mut(rhs_skip_ip as usize).unwrap().arg = end_rhs_skip_ip - rhs_skip_ip;
+
+        hints
+    }
+
     #[allow(unused)]
     fn emit_binary(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
         if hints.get_flag(EmitterFlag::PrepassVars) {
@@ -697,8 +730,9 @@ impl Emitter {
             return hints;
         }
 
-        // TODO: implement logical && , || generation.
-        // if !self.emit_logical_juncts(src_text, l, r, ast) { return hints.without_flag(EmitterFlag::IsVisitOK); }
+        if matches!(*op, Operator::LogicalAnd | Operator::LogicalOr) {
+            return self.emit_binary_logical(src_text, *op, l, r, ast, hints);
+        }
 
         struct DirOp {
             pub is_ltr: bool,

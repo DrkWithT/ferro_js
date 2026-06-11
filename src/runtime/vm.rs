@@ -376,32 +376,17 @@ unsafe fn op_force_num(context: &mut JSContext, stack: *mut JSValue) {
 
 unsafe fn op_neg_bool(context: &mut JSContext, stack: *mut JSValue) {
     unsafe {
-        let truthiness = match stack.add(context.sp as usize).as_ref().expect("Expected JSValue in stack at vm.rs: op_neg_bool") {
-            JSValue::Undefined | JSValue::Null => true,
-            JSValue::Number(f64_value) => {
-                f64::is_nan(*f64_value) || *f64_value == 0.0f64
-            },
-            JSValue::Boolean(bool_value) => {
-                !*bool_value
-            },
-            _ => false
-        };
-        
-        context.sp += 1;
-        *stack.add(context.sp as usize) = JSValue::Boolean(truthiness);
+        let temp_v = !context.jsvalue_to_boolean(stack.add(context.sp as usize).as_ref_unchecked());
+
+        *stack.add(context.sp as usize) = JSValue::Boolean(temp_v);
         context.ip = context.ip.add(1);
     }
 }
 
 unsafe fn op_neg_num(context: &mut JSContext, stack: *mut JSValue) {
     unsafe {
-        let src_num = if let Some(num_v) = stack.add(context.sp as usize).as_ref() {
-            num_v.get_number().unwrap_or(f64::NAN)
-        } else {
-            f64::NAN
-        };
-        
-        context.sp += 1;
+        let src_num = -context.jsvalue_to_number(stack.add(context.sp as usize).as_ref_unchecked());
+
         *stack.add(context.sp as usize) = JSValue::Number(src_num);
         context.ip = context.ip.add(1);
     }
@@ -415,14 +400,37 @@ unsafe fn op_mod(context: &mut JSContext, stack: *mut JSValue) {
 
 #[allow(unused)]
 unsafe fn op_mul(context: &mut JSContext, stack: *mut JSValue) {
-    // todo
+    context.sp -= 1;
+
+    unsafe {
+        let lhs_ref = stack.add(context.sp as usize).as_mut_unchecked();
+        let lhs_v = context.jsvalue_to_number(lhs_ref);
+        let rhs_v = context.jsvalue_to_number(stack.add(context.sp as usize + 1).as_ref_unchecked());
+
+        *lhs_ref = JSValue::Number(lhs_v * rhs_v);
+    }
     context.status = EvalStatus::BadOp;
 }
 
 #[allow(unused)]
 unsafe fn op_div(context: &mut JSContext, stack: *mut JSValue) {
-    // todo
-    context.status = EvalStatus::BadOp;
+    context.sp -= 1;
+
+    unsafe {
+        let lhs_ref = stack.add(context.sp as usize).as_mut_unchecked();
+        let lhs_v = context.jsvalue_to_number(lhs_ref);
+        let rhs_v = context.jsvalue_to_number(stack.add(context.sp as usize + 1).as_ref_unchecked());
+
+        *lhs_ref = JSValue::Number(if (lhs_v == 0.0 && rhs_v == 0.0) || (lhs_v.is_nan() || rhs_v.is_nan()) || (lhs_v.is_infinite() && rhs_v.is_infinite()) {
+            f64::NAN
+        } else if rhs_v.is_infinite() {
+            (if lhs_v.is_sign_negative() { -1.0 } else { 1.0 }) * 0.0
+        } else {
+            lhs_v / rhs_v
+        });
+
+        context.ip = context.ip.add(1);
+    }
 }
 
 unsafe fn op_add(context: &mut JSContext, stack: *mut JSValue) {
@@ -507,8 +515,8 @@ unsafe fn op_bt_or(context: &mut JSContext, stack: *mut JSValue) {
 
 unsafe fn op_strict_eq(context: &mut JSContext, stack: *mut JSValue) {
     unsafe {
-        let lhs_ref = stack.add(context.sp as usize - 1).as_ref().expect("Expected valid reference to LHS value on stack at vm.rs: op_strict_eq");
-        let rhs_ref = stack.add(context.sp as usize).as_ref().expect("Expected valid reference to RHS value on stack at vm.rs: op_strict_eq");
+        let lhs_ref = stack.add(context.sp as usize - 1).as_ref_unchecked();
+        let rhs_ref = stack.add(context.sp as usize).as_ref_unchecked();
 
         let flag = if lhs_ref.tag() != rhs_ref.tag() {
             false
@@ -534,8 +542,8 @@ unsafe fn op_strict_eq(context: &mut JSContext, stack: *mut JSValue) {
 
 unsafe fn op_strict_ne(context: &mut JSContext, stack: *mut JSValue) {
     unsafe {
-        let lhs_ref = stack.add(context.sp as usize - 1).as_ref().expect("Expected valid reference to LHS value on stack at vm.rs: op_strict_ne");
-        let rhs_ref = stack.add(context.sp as usize).as_ref().expect("Expected valid reference to RHS value on stack at vm.rs: op_strict_ne");
+        let lhs_ref = stack.add(context.sp as usize - 1).as_ref_unchecked();
+        let rhs_ref = stack.add(context.sp as usize).as_ref_unchecked();
 
         let flag = if lhs_ref.tag() != rhs_ref.tag() {
             false
@@ -597,9 +605,9 @@ unsafe fn op_gte(context: &mut JSContext, stack: *mut JSValue) {
 
 unsafe fn op_jump_if(context: &mut JSContext, stack: *mut JSValue) {
     unsafe {
-        let arg_truthiness = stack.add(context.sp as usize).as_ref().expect("Expected JSValue in stack at vm.rs: op_jump_if").get_boolean();
+        let arg_truthiness = context.jsvalue_to_boolean(stack.add(context.sp as usize).as_ref_unchecked());
         let jump_offset = context.ip.read().arg;
-        
+
         context.ip = if arg_truthiness {
             context.ip.offset(jump_offset as isize)
         } else {
@@ -611,7 +619,7 @@ unsafe fn op_jump_if(context: &mut JSContext, stack: *mut JSValue) {
 
 unsafe fn op_jump_else(context: &mut JSContext, stack: *mut JSValue) {
     unsafe {
-        let arg_falsiness = !stack.add(context.sp as usize).as_ref().expect("Expected JSValue in stack at vm.rs: op_jump_if").get_boolean();
+        let arg_falsiness = !context.jsvalue_to_boolean(stack.add(context.sp as usize).as_ref_unchecked());
         let jump_offset = context.ip.read().arg;
         
         context.ip = if arg_falsiness {
