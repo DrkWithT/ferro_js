@@ -584,12 +584,12 @@ impl Emitter {
                 Some(Opcode::ForceBool),
                 true
             ),
-            Operator::NegNum => (
-                Some(Opcode::NegNum),
-                true
-            ),
             Operator::ForceNum => (
                 Some(Opcode::ForceNum),
+                true
+            ),
+            Operator::NegNum => (
+                Some(Opcode::NegNum),
                 true
             ),
             Operator::Inc => (
@@ -616,6 +616,7 @@ impl Emitter {
                 },
                 *prefix
             ),
+            Operator::BitFlip => (Some(Opcode::BtFlip), true),
             Operator::Delete => (
                 // if matches!(inner.data.get_emitter_id(), SyntaxId::Literal | SyntaxId::Lhs) {
                 //     Some(Opcode::DelProp)
@@ -730,6 +731,10 @@ impl Emitter {
             Operator::BitAnd => Some(DirOp {
                 is_ltr: true,
                 opcode: Opcode::BtAnd
+            }),
+            Operator::BitXor => Some(DirOp {
+                is_ltr: true,
+                opcode: Opcode::BtXor
             }),
             Operator::BitOr => Some(DirOp {
                 is_ltr: true,

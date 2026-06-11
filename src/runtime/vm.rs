@@ -443,20 +443,66 @@ unsafe fn op_sub(context: &mut JSContext, stack: *mut JSValue) {
 
         context.sp -= 1;
         *stack.add(context.sp as usize) = JSValue::Number(lhs_num - rhs_num);
+
+        context.ip = context.ip.add(1);
+    }
+}
+
+#[allow(unused)]
+unsafe fn op_bt_flip(context: &mut JSContext, stack: *mut JSValue) {
+    unsafe {
+        let arg_p = stack.add(context.sp as usize);
+        let arg_i32 = context.jsvalue_to_i32(arg_p.as_ref_unchecked());
+
+        *arg_p = JSValue::Number((!arg_i32) as f64);
+
         context.ip = context.ip.add(1);
     }
 }
 
 #[allow(unused)]
 unsafe fn op_bt_and(context: &mut JSContext, stack: *mut JSValue) {
-    // todo
-    context.status = EvalStatus::BadOp;
+    context.sp -= 1;
+
+    unsafe {
+        let lhs_p = stack.add(context.sp as usize);
+        let lhs_i32 = context.jsvalue_to_i32(lhs_p.as_ref_unchecked());
+        let rhs_i32 = context.jsvalue_to_i32(stack.add(context.sp as usize + 1).as_ref_unchecked());
+
+        *lhs_p = JSValue::Number((lhs_i32 & rhs_i32) as f64);
+
+        context.ip = context.ip.add(1);
+    }
+}
+
+#[allow(unused)]
+unsafe fn op_bt_xor(context: &mut JSContext, stack: *mut JSValue) {
+    context.sp -= 1;
+
+    unsafe {
+        let lhs_p = stack.add(context.sp as usize);
+        let lhs_i32 = context.jsvalue_to_i32(lhs_p.as_ref_unchecked());
+        let rhs_i32 = context.jsvalue_to_i32(stack.add(context.sp as usize + 1).as_ref_unchecked());
+
+        *lhs_p = JSValue::Number((lhs_i32 ^ rhs_i32) as f64);
+
+        context.ip = context.ip.add(1);
+    }
 }
 
 #[allow(unused)]
 unsafe fn op_bt_or(context: &mut JSContext, stack: *mut JSValue) {
-    // todo
-    context.status = EvalStatus::BadOp;
+    context.sp -= 1;
+
+    unsafe {
+        let lhs_p = stack.add(context.sp as usize);
+        let lhs_i32 = context.jsvalue_to_i32(lhs_p.as_ref_unchecked());
+        let rhs_i32 = context.jsvalue_to_i32(stack.add(context.sp as usize + 1).as_ref_unchecked());
+
+        *lhs_p = JSValue::Number((lhs_i32 | rhs_i32) as f64);
+
+        context.ip = context.ip.add(1);
+    }
 }
 
 unsafe fn op_strict_eq(context: &mut JSContext, stack: *mut JSValue) {
@@ -663,8 +709,10 @@ pub fn run_vm(context: &mut JSContext) -> EvalStatus {
                 Opcode::Div => op_div(context, stack_base_ptr),
                 Opcode::Add => op_add(context, stack_base_ptr),
                 Opcode::Sub => op_sub(context, stack_base_ptr),
+                Opcode::BtFlip => op_bt_flip(context, stack_base_ptr),
                 Opcode::BtAnd => op_bt_and(context, stack_base_ptr),
                 Opcode::BtOr => op_bt_or(context, stack_base_ptr),
+                Opcode::BtXor => op_bt_xor(context, stack_base_ptr),
                 Opcode::StrictEq => op_strict_eq(context, stack_base_ptr),
                 Opcode::StrictNe => op_strict_ne(context, stack_base_ptr),
                 Opcode::LooseEq => op_loose_eq(context, stack_base_ptr),
