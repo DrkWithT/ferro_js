@@ -38,7 +38,7 @@ pub enum Operator {
 }
 
 #[repr(u8)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SyntaxId {
     Nil,
     Literal,

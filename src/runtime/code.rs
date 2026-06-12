@@ -62,6 +62,7 @@ pub enum Opcode {
     Jump,
     Call,
     CallCtor,
+    NativeCall,
     Ret,
     // RET_CLOSURE,
 }
@@ -123,6 +124,7 @@ pub const OPCODE_NAMES: &[&str] = &[
     "Jump",
     "Call",
     "CallCtor",
+    "NativeCall",
     "Ret",
 ];
 

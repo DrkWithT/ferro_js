@@ -85,9 +85,9 @@ impl Shape {
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PropFlag {
-    Writable,
-    Enumerable,
-    Configurable,
+    Writable = (1 << 0),
+    Enumerable = (1 << 1),
+    Configurable = (1 << 2),
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +102,34 @@ pub struct Property {
     pub flags: u8,
 }
 
+impl Property {
+    pub fn data(v: &JSValue, flags: u8) -> Self {
+        Self {
+            body: PropBody::Data(*v),
+            flags
+        }
+    }
+
+    pub fn accessor(getter: &JSValue, setter: &JSValue, flags: u8) -> Self {
+        Self {
+            body: PropBody::Accessor((*getter, *setter)),
+            flags
+        }
+    }
+
+    pub fn is_writable(&self) -> bool {
+        0 != self.flags & PropFlag::Writable as u8
+    }
+
+    pub fn is_configurable(&self) -> bool {
+        0 != self.flags & PropFlag::Configurable as u8
+    }
+
+    pub fn is_enumerable(&self) -> bool {
+        0 != self.flags & PropFlag::Enumerable as u8
+    }
+}
+
 pub const JS_OBJECT_COST: usize = 56;
 pub const JS_STRING_COST: usize = 24;
 
@@ -112,6 +140,18 @@ pub struct ExoticObject {
     pub in_proto: JSValue,
     pub out_proto: JSValue,
     pub shape: i32,
+}
+
+impl Default for ExoticObject {
+    fn default() -> Self {
+        Self {
+            props: vec![],
+            items: vec![],
+            in_proto: JSValue::Undefined,
+            out_proto: JSValue::Undefined,
+            shape: DUD_SHAPE_ID
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -184,7 +224,7 @@ impl JSObjectWrap {
 
         match &my_data.props.get(prop_offset.unwrap()).unwrap().body {
             PropBody::Data(prop_v) => Some(*prop_v),
-            _ => None
+            PropBody::Accessor((_, _)) => None
         }
     }
 
