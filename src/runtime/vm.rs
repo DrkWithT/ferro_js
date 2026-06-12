@@ -659,10 +659,24 @@ unsafe fn op_jump(context: &mut JSContext, _: *mut JSValue) {
     }
 }
 
-#[allow(unused)]
 unsafe fn op_call(context: &mut JSContext, stack: *mut JSValue) {
-    // todo: check context.cd < context.cm
-    context.status = EvalStatus::BadOp;
+    if context.cd > context.cm {
+        eprintln!("Exceeded max call depth of \x1b[1;31m{}\x1b[0m!", context.cm);
+        context.status = EvalStatus::BadOp;
+        return;
+    }
+
+    unsafe {
+        let callee_argc = context.ip.as_ref_unchecked().arg;
+        let callee_slot = context.sp - callee_argc;
+
+        let func_oid = stack.add(callee_slot as usize).as_ref_unchecked().get_obj_id().unwrap_or(DUD_POOL_ID);
+        let func_obj_ref = context.heap.get_item(func_oid).expect("Expected valid heap-ID of callee at vm.rs ~ op_call").as_ptr().as_mut_unchecked();
+
+        let Some(func_ref) = func_obj_ref.as_func_mut() else { context.status = EvalStatus::BadOp; return; };
+
+        context.status = func_ref.call(context, callee_argc as u16);
+    }
 }
 
 #[allow(unused)]
@@ -671,16 +685,22 @@ unsafe fn op_call_ctor(context: &mut JSContext, stack: *mut JSValue) {
     context.status = EvalStatus::BadOp;
 }
 
+#[allow(unused)]
+unsafe fn op_native_call(context: &mut JSContext, stack: *mut JSValue) {
+    context.status = EvalStatus::BadOp;
+}
+
 unsafe fn op_ret(context: &mut JSContext, stack: *mut JSValue) {
     unsafe {
-        let CallFrame {caller_rip, caller_cvp, caller_bp, callee_bp, ..} = context.frames.last().expect("Expected present call frame at vm.rs: op_ret");
+        let CallFrame {caller_rip, caller_icp, caller_cvp, caller_bp, callee_bp, ..} = context.frames.last().expect("Expected present call frame at vm.rs: op_ret");
         let result_v = stack.add(context.sp as usize).read();
-        
-        context.sp = *callee_bp;
+
+        context.sp = *callee_bp - 1;
         *stack.add(context.sp as usize) = result_v;
         context.bp = *caller_bp;
         context.ip = *caller_rip;
         context.cvp = *caller_cvp;
+        context.icp = *caller_icp;
 
         context.frames.pop();
         context.cd -= 1;
@@ -754,7 +774,11 @@ pub fn run_vm(context: &mut JSContext) -> EvalStatus {
                 Opcode::Jump => op_jump(context, stack_base_ptr),
                 Opcode::Call => op_call(context, stack_base_ptr),
                 Opcode::CallCtor => op_call_ctor(context, stack_base_ptr),
+                Opcode::NativeCall => op_native_call(context, stack_base_ptr),
                 Opcode::Ret => op_ret(context, stack_base_ptr),
+                // _ => {
+                //     context.status = EvalStatus::BadOp;
+                // }
             };
         }
     }

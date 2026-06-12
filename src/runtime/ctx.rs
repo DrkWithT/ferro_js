@@ -47,6 +47,7 @@ pub struct CallFrame {
     pub this_p: JSValue, // ! FIXME: use JSValue instead to simplify property accesses later with object-id values + key-value...
     pub callee_p: *mut JSObjectWrap, // ! FIXME: use JSValue
     pub caller_rip: *const Instruction,
+    pub caller_icp: *mut InlineCache,
     pub caller_cvp: *const JSValue,
     pub caller_bp: i32,
     pub callee_bp: i32,
@@ -58,6 +59,7 @@ impl Default for CallFrame {
             this_p: JSValue::Undefined,
             callee_p: std::ptr::null_mut(),
             caller_rip: std::ptr::null(),
+            caller_icp: std::ptr::null_mut(),
             caller_cvp: std::ptr::null(),
             caller_bp: 0,
             callee_bp: 0,
@@ -113,9 +115,10 @@ impl JSContext {
             this_p: JSValue::Undefined,
             callee_p: std::ptr::null_mut(),
             caller_rip: std::ptr::null(),
-            caller_cvp: start_cvp,
+            caller_icp: std::ptr::null_mut(),
+            caller_cvp: std::ptr::null(),
             caller_bp: 0,
-            callee_bp: 0
+            callee_bp: 1
         };
 
         first_frame.this_p = JSValue::ObjectId(first_env_id);
@@ -148,11 +151,34 @@ impl JSContext {
             ip: start_ip,
             icp: start_icp,
             cvp: start_cvp,
-            bp: 0,
-            sp: 1,
+            bp: 1,
+            sp: 1, // ! NOTE: maybe adjust this?
             cd: 1,
             cm: calls_max,
             status: EvalStatus::Pending
+        }
+    }
+
+    pub fn get_curr_env(&self) -> JSValue {
+        self.frames.last().expect("Expected available environment at ctx.rs ~ get_curr_env").this_p
+    }
+
+    pub fn create_child_env(&mut self) -> JSValue {
+        let current_env_v = self.frames.last().expect("Expected available environment at ctx.rs ~ create_child_env").this_p;
+
+        if let Some(new_env_oid) = self.heap.add_item(Some(Rc::new(RefCell::new(JSObjectWrap::Exotic(
+            ExoticObject {
+                props: vec![],
+                items: vec![],
+                in_proto: current_env_v,
+                out_proto: JSValue::Undefined,
+                shape: 0,
+            }
+        ))))) {
+            JSValue::ObjectId(new_env_oid)
+        } else {
+            self.status = EvalStatus::BadAlloc;
+            JSValue::Undefined
         }
     }
 
