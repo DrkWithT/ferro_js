@@ -11,18 +11,7 @@
         - `~`, `&`, `|`, `^` --> rule between equality and logical
     - Logical operators `&&`, `||`, `!` **DONE**
         - `&&` or `||` will short circuit evaluate LHS and/or RHS, possibly not boolean
-    - Add loose equality: **TODO**
-        - IF same types:
-            - undefined or null on either side => true
-            - boolean => direct comparison
-            - numbers => direct comparison
-            - string => direct comparison
-            - object => check reference equality?
-        - ELSE:
-            - boolean on either side vs. number => coerce any boolean to 0 or 1 and then compare
-            - string on either side vs. number => coerce any string to number and compare
-            - object on either side vs. number or string => coerce objects to primitive number or string and compare
-            - ... => false
+    - Add loose equality: **WIP**
  - Support more control flow: `while`, C-style `for`, `switch`
     - Add `break` and `continue` support.
  - Support global this.
