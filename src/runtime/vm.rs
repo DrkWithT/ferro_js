@@ -173,6 +173,9 @@ unsafe fn op_get_var(context: &mut JSContext, stack: *mut JSValue) {
         let key_id = stack.add(context.sp as usize).as_ref_unchecked().get_str_id().unwrap_or(0) as usize;
         let ic_id = context.ip.read().flags & 0x7fff; // ! 16th bit saved as special flag IF an IC is present
 
+        // print!("op_get_var:\nenv_obj_id = ");
+        // dbg!(env_obj_id);
+
         if let Some(var_value) = context.heap.get_item(env_obj_id).expect("Expected environment by heap-ID at vm.rs ~ op_get_var").borrow().get_property_data_value(context, key_id, ic_id) {
             *stack.add(context.sp as usize) = var_value;
             context.ip = context.ip.add(1);

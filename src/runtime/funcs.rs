@@ -1,5 +1,5 @@
 use crate::runtime::objects::{ExoticObject};
-use crate::runtime::code::{Opcode, Instruction, Chunk};
+use crate::runtime::code::{Opcode, Instruction, Chunk, dump_chunk};
 use crate::runtime::ctx::{CallFrame, EvalStatus, JSContext};
 
 /// Type alias for Rust-native functions to call from FerroJS. These natives are "trampolined" into from a wrapping `JSFunction`: That chunk would have `PushUndef, NativeCall, Ret` which would defer to natives without a VM vs. native check.
@@ -83,6 +83,9 @@ impl JSFunction {
 
             let env_jsvalue = if self.get_flag(JSFuncFlag::NeedsEnv) { state.create_child_env() } else { state.get_curr_env() };
 
+            // print!("In funcs.rs, JSFunction::call:\nenv_js_value = ");
+            // dbg!(env_jsvalue);
+
             state.frames.push(CallFrame {
                 this_p: env_jsvalue,
                 callee_p: state.frames.last().unwrap().callee_p,
@@ -108,5 +111,12 @@ impl JSFunction {
     pub fn call_ctor(&mut self, state: &mut JSContext, argc: u16) -> EvalStatus {
         eprintln!("Unimplemented Function.[[Construct]]"); // todo: implement this after objects start working properly with accessors.
         EvalStatus::BadOp
+    }
+
+    pub fn show_bytecode(&self, func_oid: u16) {
+        let JSFunction { body, arity, flags , ..} = self;
+
+        println!("\x1b[1;33mFunction\x1b[0m(arity = \x1b[1;31m{arity}\x1b[0m, flags = \x1b[1;31m{flags}\x1b[0m)\n");
+        dump_chunk(body, func_oid);
     }
 }

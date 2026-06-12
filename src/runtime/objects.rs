@@ -214,7 +214,20 @@ impl JSObjectWrap {
             } else { (None, true) }
         };
 
-        prop_offset?;
+        let parent_env_oid = my_data.in_proto.get_obj_id();
+
+        // println!("In objects.rs at JSObjectWrap::get_property_data_value:");
+        // dbg!(my_data.in_proto);
+
+        if prop_offset.is_none() {
+            if let Some(parent_obj) = ctx.heap.get_item(parent_env_oid.unwrap_or(DUD_POOL_ID)) {
+                unsafe { // ! TODO: fix unwrap panic here... is the env parent / prototype real?
+                    return parent_obj.as_ptr().as_mut_unchecked().get_property_data_value(ctx, key_id, ic_id);
+                }
+            } else if parent_env_oid.is_none() {
+                return None;
+            }
+        }
 
         if ic_dirty {
             unsafe {
@@ -240,7 +253,17 @@ impl JSObjectWrap {
             } else { (None, true) }
         };
 
-        prop_offset?;
+        let parent_env_oid = my_data.in_proto.get_obj_id();
+
+        if prop_offset.is_none() {
+            if let Some(parent_obj) = ctx.heap.get_item(parent_env_oid.unwrap_or(DUD_POOL_ID)) {
+                unsafe {
+                    return parent_obj.as_ptr().as_mut_unchecked().get_property_data_mut(ctx, key_id, ic_id);
+                }
+            } else if parent_env_oid.is_none() {
+                return None;
+            }
+        }
 
         if ic_dirty {
             unsafe {
