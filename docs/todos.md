@@ -2,29 +2,23 @@
 
 #### v0.1.0
  - Support more JS operators, including prefix, postfix, bitwise, and logical ops.
-    - Prefix and postfix: **DONE**
-        - prefix first for `++` and `--`
-        - postfix after prefix versions
-    - Bitwise: **DONE**
-        - Grammar 1: `unary -> ("~" | ...) inner`
-        - Grammar 2: `equality & equality` -> `bitand ^ bitand` -> `bitxor | bitxor`
-        - `~`, `&`, `|`, `^` --> rule between equality and logical
-    - Logical operators `&&`, `||`, `!` **DONE**
-        - `&&` or `||` will short circuit evaluate LHS and/or RHS, possibly not boolean
-    - Add loose equality: **WIP**
- - Support more control flow: `while`, C-style `for`, `switch`
-    - Add `break` and `continue` support.
- - Support global this.
- - Support special impl attributes in global object properties: `IsDecl` must be checked on `delete`.
- - Support property semantics: data vs. accessor, writable + configurable + enumerable.
- - Support simple functions, including their call-this semantics.
+ - Support simple functions.
+    - Support emitting simple function decls (NOTE: _Fail on returning closures, etc. until full object system is done!_)
+ - Support simple objects with property semantics: data vs. accessor, writable + configurable + enumerable.
+    - Exotic / generic object literals.
+    - `get/set` accessors as JSValues' each wrapping a Function.
+ - Support `Function` semantics e.g `.name, .length, .constructor, .call()`
  - Support native display(...args) function.
+    - Trampoline to native calls with stub array that has `[PushUndef, NativeCall, Ret]`.
+ - Add `break` and `continue` support.
+ - Support more control flows: C-style `for`, `switch`
 
 #### v0.2.0
- - Support compound assignment ops: `*=`, `/=`, `+=`, `-=`
  - Add `typeof`, `delete`
+ - Handle computed property keys with caching them by string -> existing ID...
  - Support built-in `Date`, `Math`.
  - Support built-in `Array`, `Object`.
     - Support array (native object with array prototype)
     - Support array literals.
     - Support array prototype methods except `sort` and locales.
+ - Support compound assignment ops: `*=`, `/=`, `+=`, `-=`
