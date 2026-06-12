@@ -178,12 +178,12 @@ impl From<u32> for JSValue {
 impl Display for JSValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Undefined => write!(f, "JSValue(undefined)"),
-            Self::Null => write!(f, "JSValue(null)"),
-            Self::Boolean(b) => write!(f, "JSValue({})", *b),
-            Self::Number(n) => write!(f, "JSValue({})", *n),
-            Self::StringId(sid) => write!(f, "JSValue(sid-{})", *sid),
-            Self::ObjectId(oid) => write!(f, "JSValue(oid-{})", *oid),
+            Self::Undefined => write!(f, "undefined"),
+            Self::Null => write!(f, "null"),
+            Self::Boolean(b) => write!(f, "{}", *b),
+            Self::Number(n) => write!(f, "{}", *n),
+            Self::StringId(sid) => write!(f, "ferrojs-sid-{}", *sid),
+            Self::ObjectId(oid) => write!(f, "ferrojs-oid-{}", *oid),
         }
     }
 }

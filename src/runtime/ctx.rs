@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use crate::runtime::values::JSValue;
 use crate::runtime::code::{Instruction, InlineCache, Chunk, Program};
-use crate::runtime::objects::{DUD_SHAPE_ID, ExoticObject, ItemPool, JS_OBJECT_COST, JS_STRING_COST, JSObjPtr, JSObjectWrap, JSStrPtr, Shape, ShapePool};
+use crate::runtime::objects::{DUD_POOL_ID, DUD_SHAPE_ID, ExoticObject, ItemPool, JS_OBJECT_COST, JS_STRING_COST, JSObjPtr, JSObjectWrap, JSStrPtr, Shape, ShapePool};
 
 /// ### ABOUT
 /// Indicates status of VM execution. See each enum member for a quick description.
@@ -235,6 +235,24 @@ impl JSContext {
             raw_num as u32
         } else {
             f64::floor(raw_num) as u32
+        }
+    }
+
+    /// ### ABOUT
+    /// Implements a subset of Strict Equality algorithm for same typed values. This is a helper function for both strict equality and loose equality opcodes.
+    pub fn jsvalue_test_same_types_eq(&self, lhs: &JSValue, rhs: &JSValue) -> bool {
+        unsafe {
+            match lhs {
+                JSValue::Undefined | JSValue::Null => true,
+                JSValue::Boolean(lhs_bool) => *lhs_bool == rhs.get_boolean(),
+                JSValue::Number(f_value) => *f_value == rhs.get_number().unwrap_or(f64::NAN),
+                JSValue::StringId(lhs_sid) => if *lhs_sid == rhs.get_str_id().unwrap_or(DUD_POOL_ID) {
+                    true
+                } else {
+                    self.spool.get_item(*lhs_sid).unwrap().as_ptr().as_ref().expect("Expected valid interned string of LHS at vm.rs: op_strict_eq") == self.spool.get_item(rhs.get_str_id().unwrap()).unwrap().as_ptr().as_ref().expect("Expected valid interned string of RHS at vm.rs: op_strict_eq")
+                },
+                JSValue::ObjectId(lhs_oid) => *lhs_oid == rhs.get_obj_id().unwrap_or(DUD_POOL_ID)
+            }
         }
     }
 }

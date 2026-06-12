@@ -285,41 +285,9 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         }))
     }
 
-    fn parse_prefix_unary(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
-        let first_tk_pos = self.pos;
-
-        let prefix_unary_op = match self.tokens[self.pos].kind {
-            TokenKind::OperatorBang => Operator::NegBool,
-            TokenKind::OperatorPlus => Operator::ForceNum,
-            TokenKind::OperatorMinus => Operator::NegNum,
-            TokenKind::OperatorPlusPlus => Operator::Inc,
-            TokenKind::OperatorMinusMinus => Operator::Dec,
-            TokenKind::OperatorBitFlip => Operator::BitFlip,
-            TokenKind::KeywordNew => Operator::New,
-            TokenKind::KeywordDelete => Operator::Delete,
-            TokenKind::KeywordTypeOf => Operator::TypeOf,
-            TokenKind::KeywordVoid => Operator::Void,
-            _ => Operator::Noop,
-        };
-
-        if prefix_unary_op != Operator::Noop {
-            self.consume();
-        } else {
-            return self.parse_call();
-        }
-
-        let inner = self.parse_call()?;
-
-        Ok(Box::new(SyntaxNode {
-            data: SyntaxData::Unary { inner, op: prefix_unary_op, prefix: true },
-            first_tk: first_tk_pos,
-            end_tk: self.pos
-        }))
-    }
-
     fn parse_postfix_unary(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
         let first_tk_pos = self.pos;
-        let inner = self.parse_prefix_unary()?;
+        let inner = self.parse_call()?;
 
         let postfix_unary_op = match self.tokens[self.pos].kind {
             TokenKind::OperatorPlusPlus => {
@@ -344,8 +312,40 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         }))
     }
 
+    fn parse_prefix_unary(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
+        let first_tk_pos = self.pos;
+
+        let prefix_unary_op = match self.tokens[self.pos].kind {
+            TokenKind::OperatorBang => Operator::NegBool,
+            TokenKind::OperatorPlus => Operator::ForceNum,
+            TokenKind::OperatorMinus => Operator::NegNum,
+            TokenKind::OperatorPlusPlus => Operator::Inc,
+            TokenKind::OperatorMinusMinus => Operator::Dec,
+            TokenKind::OperatorBitFlip => Operator::BitFlip,
+            TokenKind::KeywordNew => Operator::New,
+            TokenKind::KeywordDelete => Operator::Delete,
+            TokenKind::KeywordTypeOf => Operator::TypeOf,
+            TokenKind::KeywordVoid => Operator::Void,
+            _ => Operator::Noop,
+        };
+
+        if prefix_unary_op != Operator::Noop {
+            self.consume();
+        } else {
+            return self.parse_postfix_unary();
+        }
+
+        let inner = self.parse_postfix_unary()?;
+
+        Ok(Box::new(SyntaxNode {
+            data: SyntaxData::Unary { inner, op: prefix_unary_op, prefix: true },
+            first_tk: first_tk_pos,
+            end_tk: self.pos
+        }))
+    }
+
     fn parse_factor(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
-        let mut lhs = self.parse_postfix_unary()?;
+        let mut lhs = self.parse_prefix_unary()?;
 
         while !self.at_eof() {
             let factor_op = match self.tokens[self.pos].kind {
@@ -362,7 +362,7 @@ impl<'external_content_lt> Parser<'external_content_lt> {
 
             let pre_rhs_pos = self.pos;
             lhs = Box::new(SyntaxNode {
-                data: SyntaxData::Binary { l: lhs, r: self.parse_postfix_unary()?, op: factor_op },
+                data: SyntaxData::Binary { l: lhs, r: self.parse_prefix_unary()?, op: factor_op },
                 first_tk: pre_rhs_pos,
                 end_tk: self.pos,
             });
@@ -432,6 +432,8 @@ impl<'external_content_lt> Parser<'external_content_lt> {
             let equality_op = match self.tokens[self.pos].kind {
                 TokenKind::OperatorStrictEquals => Operator::StrictEqual,
                 TokenKind::OperatorStrictUnequals => Operator::StrictUnequal,
+                TokenKind::OperatorLooseEqual => Operator::LooseEqual,
+                TokenKind::OperatorLooseUnequal => Operator::LooseUnequal,
                 _ => Operator::Noop,
             };
 
@@ -640,7 +642,7 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         let cond = self.parse_or()?;
 
         let rparen_tk = &self.tokens[self.pos];
-        CONSUME_OF!(self.consume(), ParseErr { culprit: rparen_tk.clone(), msg: "Expected '(' closing an if-condition here.", line: rparen_tk.line }, rparen_tk.clone(), TokenKind::RightParen);
+        CONSUME_OF!(self.consume(), ParseErr { culprit: rparen_tk.clone(), msg: "Expected ')' closing an if-condition here.", line: rparen_tk.line }, rparen_tk.clone(), TokenKind::RightParen);
 
         let tbody = self.parse_stmt();
         let fbody: Result<Box<SyntaxNode>, ParseErr> = if self.tokens[self.pos].kind == TokenKind::KeywordElse {

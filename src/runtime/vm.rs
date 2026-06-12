@@ -1,4 +1,4 @@
-use crate::runtime::values::{JSValue};
+use crate::runtime::values::{JSVTag, JSValue};
 use crate::runtime::objects::{DUD_POOL_ID};
 use crate::runtime::code::{Opcode};
 use crate::runtime::ctx::{CallFrame, EvalStatus, JSContext};
@@ -514,54 +514,36 @@ unsafe fn op_bt_or(context: &mut JSContext, stack: *mut JSValue) {
 }
 
 unsafe fn op_strict_eq(context: &mut JSContext, stack: *mut JSValue) {
+    context.sp -= 1;
+
     unsafe {
-        let lhs_ref = stack.add(context.sp as usize - 1).as_ref_unchecked();
-        let rhs_ref = stack.add(context.sp as usize).as_ref_unchecked();
+        let lhs_ref = stack.add(context.sp as usize).as_ref_unchecked();
+        let rhs_ref = stack.add(context.sp as usize + 1).as_ref_unchecked();
 
         let flag = if lhs_ref.tag() != rhs_ref.tag() {
             false
         } else {
-            match lhs_ref {
-                JSValue::Undefined | JSValue::Null => true,
-                JSValue::Boolean(lhs_bool) => *lhs_bool == rhs_ref.get_boolean(),
-                JSValue::Number(f_value) => *f_value == rhs_ref.get_number().unwrap_or(f64::NAN),
-                JSValue::StringId(lhs_sid) => if *lhs_sid == rhs_ref.get_str_id().unwrap_or(DUD_POOL_ID) {
-                    true
-                } else {
-                    context.spool.get_item(*lhs_sid).unwrap().as_ptr().as_ref().expect("Expected valid interned string of LHS at vm.rs: op_strict_eq") == context.spool.get_item(rhs_ref.get_str_id().unwrap()).unwrap().as_ptr().as_ref().expect("Expected valid interned string of RHS at vm.rs: op_strict_eq")
-                },
-                JSValue::ObjectId(lhs_oid) => *lhs_oid == rhs_ref.get_obj_id().unwrap_or(DUD_POOL_ID)
-            }
+            context.jsvalue_test_same_types_eq(lhs_ref, rhs_ref)
         };
 
-        context.sp -= 1;
         *stack.add(context.sp as usize) = JSValue::Boolean(flag);
         context.ip = context.ip.add(1);
     }
 }
 
 unsafe fn op_strict_ne(context: &mut JSContext, stack: *mut JSValue) {
+    context.sp -= 1;
+
     unsafe {
-        let lhs_ref = stack.add(context.sp as usize - 1).as_ref_unchecked();
-        let rhs_ref = stack.add(context.sp as usize).as_ref_unchecked();
+        let lhs_ref = stack.add(context.sp as usize).as_ref_unchecked();
+        let rhs_ref = stack.add(context.sp as usize + 1).as_ref_unchecked();
 
         let flag = if lhs_ref.tag() != rhs_ref.tag() {
-            false
+            true
         } else {
-            match lhs_ref {
-                JSValue::Undefined | JSValue::Null => false,
-                JSValue::Boolean(lhs_bool) => *lhs_bool != rhs_ref.get_boolean(),
-                JSValue::Number(f_value) => *f_value != rhs_ref.get_number().unwrap_or(f64::NAN),
-                JSValue::StringId(lhs_sid) => if *lhs_sid != rhs_ref.get_str_id().unwrap_or(DUD_POOL_ID) {
-                    true
-                } else {
-                    context.spool.get_item(*lhs_sid).unwrap().as_ptr().as_ref().expect("Expected valid interned string of LHS at vm.rs: op_strict_eq") != context.spool.get_item(rhs_ref.get_str_id().unwrap()).unwrap().as_ptr().as_ref().expect("Expected valid interned string of RHS at vm.rs: op_strict_eq")
-                },
-                JSValue::ObjectId(lhs_oid) => *lhs_oid != rhs_ref.get_obj_id().unwrap_or(DUD_POOL_ID)
-            }
+            !context.jsvalue_test_same_types_eq(lhs_ref, rhs_ref)
         };
 
-        context.sp -= 1;
         *stack.add(context.sp as usize) = JSValue::Boolean(flag);
         context.ip = context.ip.add(1);
     }
@@ -569,14 +551,52 @@ unsafe fn op_strict_ne(context: &mut JSContext, stack: *mut JSValue) {
 
 #[allow(unused)]
 unsafe fn op_loose_eq(context: &mut JSContext, stack: *mut JSValue) {
-    // todo
-    context.status = EvalStatus::BadOp;
+    context.sp -= 1;
+
+    unsafe {
+        let lhs_ref = stack.add(context.sp as usize).as_ref_unchecked();
+        let rhs_ref = stack.add(context.sp as usize + 1).as_ref_unchecked();
+
+        let flag = if lhs_ref.tag() == rhs_ref.tag() {
+            context.jsvalue_test_same_types_eq(lhs_ref, rhs_ref)
+        } else if lhs_ref.is_undefined() || lhs_ref.is_null() || rhs_ref.is_undefined() || rhs_ref.is_null() {
+            true
+        } else if lhs_ref.tag() == JSVTag::Object && rhs_ref.tag() == JSVTag::Object {
+            lhs_ref.get_obj_id().unwrap_or(DUD_POOL_ID) == rhs_ref.get_obj_id().unwrap_or(DUD_POOL_ID)
+        } else if lhs_ref.tag() == JSVTag::Number || rhs_ref.tag() == JSVTag::Number {
+            context.jsvalue_to_number(lhs_ref) == context.jsvalue_to_number(rhs_ref)
+        } else {
+            false
+        };
+
+        *stack.add(context.sp as usize) = JSValue::Boolean(flag);
+        context.ip = context.ip.add(1);
+    }
 }
 
 #[allow(unused)]
 unsafe fn op_loose_ne(context: &mut JSContext, stack: *mut JSValue) {
-    // todo
-    context.status = EvalStatus::BadOp;
+    context.sp -= 1;
+
+    unsafe {
+        let lhs_ref = stack.add(context.sp as usize).as_ref_unchecked();
+        let rhs_ref = stack.add(context.sp as usize + 1).as_ref_unchecked();
+
+        let flag = if lhs_ref.tag() == rhs_ref.tag() {
+            !context.jsvalue_test_same_types_eq(lhs_ref, rhs_ref)
+        } else if lhs_ref.is_undefined() || lhs_ref.is_null() || rhs_ref.is_undefined() || rhs_ref.is_null() {
+            false
+        } else if lhs_ref.tag() == JSVTag::Object && rhs_ref.tag() == JSVTag::Object {
+            lhs_ref.get_obj_id().unwrap_or(DUD_POOL_ID) != rhs_ref.get_obj_id().unwrap_or(DUD_POOL_ID)
+        } else if lhs_ref.tag() == JSVTag::Number || rhs_ref.tag() == JSVTag::Number {
+            context.jsvalue_to_number(lhs_ref) != context.jsvalue_to_number(rhs_ref)
+        } else {
+            true
+        };
+
+        *stack.add(context.sp as usize) = JSValue::Boolean(flag);
+        context.ip = context.ip.add(1);
+    }
 }
 
 #[allow(unused)]
