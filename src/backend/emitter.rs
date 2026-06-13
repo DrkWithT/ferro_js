@@ -317,10 +317,10 @@ impl Emitter {
     fn emit_name(&mut self, lexeme: &str, hints: EmitterHints) -> EmitterHints {
         if hints.get_flag(EmitterFlag::CheckFnIsSimple) {
             if self.scopes.last().unwrap().symbols.contains_key(lexeme) {
-                println!("Debug emitter.rs: '{lexeme}' -> local");
+                // println!("Debug emitter.rs: '{lexeme}' -> local");
                 return hints;
             } else {
-                println!("Debug emitter.rs: '{lexeme}' -> possible capture");
+                // println!("Debug emitter.rs: '{lexeme}' -> possible capture");
                 return hints.without_flag(EmitterFlag::IsFuncSimple);
             }
         }
@@ -364,7 +364,7 @@ impl Emitter {
                 !needs_special_updating,
             )
         } else if name_in_access || !name_lacks_env {
-            println!("Debug emitter.rs: '{lexeme}' -> possible object key...");
+            // println!("Debug emitter.rs: '{lexeme}' -> possible object key...");
             // ? Skip emission of LHS for assignment exprs to prevent a messy stack situation... Just put its environment object key.
             (
                 self.resolve_global_string(lexeme, true).or_else(|| {
@@ -628,7 +628,7 @@ impl Emitter {
         }).with_flag(EmitterFlag::CheckFnIsSimple);
 
         // ? Pre-check during generation via prepass: if there's nested scopes / captured names / closure returns, an environment is needed at runtime for the function (now considered complex).
-        let func_is_simple = self.emit_node(src_text, body, ast, pre_param_check_hints).get_flag(EmitterFlag::IsFuncSimple);
+        let func_is_simple = self.emit_node(src_text, body, ast, pre_param_check_hints).get_flag(EmitterFlag::IsFuncSimple) || hints.get_flag(EmitterFlag::InMethod);
 
         // ! Delete the mock parameter entries to not confuse the emission's name resolution.
         self.scopes.last_mut().unwrap().symbols.clear();
@@ -712,7 +712,7 @@ impl Emitter {
             return hints;
         }
 
-        if !self.emit_node(src_text, source, ast, hints).check_ok() {
+        if !self.emit_node(src_text, source, ast, hints.without_flag(EmitterFlag::InLocator)).check_ok() {
             return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
@@ -1153,7 +1153,6 @@ impl Emitter {
 
         // ? Pre-check during generation via prepass: if there's nested scopes / captured names / closure returns, an environment is needed at runtime for the function (now considered complex).
         let func_is_simple = self.emit_node(src_text, body, ast, pre_param_check_hints).get_flag(EmitterFlag::IsFuncSimple);
-            // || hints.get_flag(EmitterFlag::InMethod))
 
         // ! Delete the mock symbol entries to not confuse the emission's name resolution.
         self.scopes.last_mut().unwrap().symbols.clear();

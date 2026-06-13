@@ -5,11 +5,9 @@
  - Support simple functions.
     - Support emitting simple function decls (NOTE: _Fail on returning closures, etc. until full object system is done!_)
  - Support simple objects with property semantics: data vs. accessor, writable + configurable + enumerable.
-    - Generate bytecode for exotic / generic object literals. **WIP**
-    - Generate bytecode for `get/set` accessors' usage. **WIP**
     - Test & Refactor:
       - Refactor properties to just be 3 JSValues & flags: `[[Value]], [[Get]], [[Set]], [[Flags]]`
-      - Implement support for `foo.bar = 123` expressions.
+ - Implement closures.
  - Support assignment op results, conditional ternary op.
  - Add `typeof`, `delete`
    - TypeOf results:
