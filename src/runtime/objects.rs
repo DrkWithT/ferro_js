@@ -242,10 +242,16 @@ impl JSObjectWrap {
         let my_data = self.as_object()?;
         let my_shape_id = my_data.shape;
 
+        dbg!(my_shape_id);
+
         let (prop_offset, ic_dirty) = unsafe {
             if let Some (ic_slot) = ctx.icp.add(ic_id as usize).as_mut().unwrap().find(my_shape_id, key_id) {
+                println!("Debug: try IC...");
+                dbg!(my_shape_id, key_id);
                 (Some(ic_slot), false)
             } else if let Some(slow_prop_ref) = ctx.shapes.fetch(my_shape_id) {
+                println!("Debug: try Shape...");
+                dbg!(my_shape_id, key_id);
                 (slow_prop_ref.resolve_offset(key_id), true)
             } else { (None, true) }
         };
@@ -254,6 +260,7 @@ impl JSObjectWrap {
 
         // println!("In objects.rs at JSObjectWrap::get_property_data_value:");
         // dbg!(my_data.in_proto);
+        dbg!(prop_offset);
 
         if prop_offset.is_none() {
             if let Some(parent_obj) = ctx.heap.get_item(parent_env_oid.unwrap_or(DUD_POOL_ID)) {
@@ -261,6 +268,7 @@ impl JSObjectWrap {
                     return parent_obj.as_ptr().as_mut_unchecked().get_property_data_value(ctx, key_id, ic_id, try_use_getter);
                 }
             } else if parent_env_oid.is_none() {
+                println!("Debug objects.rs ~ get_property_data_value: End env bubbling...");
                 return None;
             }
         }
