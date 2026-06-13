@@ -69,7 +69,6 @@ impl JSFunction {
         0 != self.flags & flag as u8
     }
 
-    #[allow(unused)]
     pub fn call(&mut self, state: &mut JSContext, argc: u16) -> EvalStatus {
         unsafe {
             let caller_rip = state.ip.add(1);
@@ -77,17 +76,14 @@ impl JSFunction {
             let caller_cvp = state.cvp;
             let caller_bp = state.bp;
             let callee_bp = state.sp - argc as i32; // callee ref
-            let Some(callee_oid) = state.stack[callee_bp as usize].get_obj_id() else {
-                return EvalStatus::BadOp;
-            };
 
-            let env_jsvalue = if self.get_flag(JSFuncFlag::NeedsEnv) { state.create_child_env() } else { state.get_curr_env() };
+            let env_v = if self.get_flag(JSFuncFlag::NeedsEnv) { state.create_child_env() } else { state.get_curr_env() };
 
             // print!("In funcs.rs, JSFunction::call:\nenv_js_value = ");
             // dbg!(env_jsvalue);
 
             state.frames.push(CallFrame {
-                this_p: env_jsvalue,
+                env_v,
                 callee_p: state.frames.last().unwrap().callee_p,
                 caller_rip,
                 caller_icp,

@@ -25,8 +25,6 @@ pub enum Opcode {
     GetVar,
     SetVar,
     MakeObj,
-    GetOwnProp,
-    SetOwnProp,
     GetProp,
     SetProp,
     DelProp,
@@ -87,8 +85,6 @@ pub const OPCODE_NAMES: &[&str] = &[
     "GetVar",
     "SetVar",
     "MakeObj",
-    "GetOwnProp",
-    "SetOwnProp",
     "GetProp",
     "SetProp",
     "DelProp",
@@ -191,6 +187,14 @@ pub struct InlineCache {
 }
 
 impl InlineCache {
+    pub fn dead() -> Self {
+        Self {
+            entries: [ ICEntry::default(), ICEntry::default() ],
+            misses: 0,
+            state: ICState::Dead
+        }
+    }
+
     fn transition(misses: u32) -> ICState {
         if misses < IC_MISSES_TO_POLY {
             ICState::Mono

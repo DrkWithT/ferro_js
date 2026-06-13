@@ -44,7 +44,7 @@ pub struct CallFrame {
     ///  - 1: Holds a new object environment upon ctor calls.
     ///  - 2: Holds a custom `this` Value from `Function.call()`.
     ///  - 3: If `use strict` applies, do not coerce `this` to globalThis. Otherwise, do so.
-    pub this_p: JSValue, // ! FIXME: use JSValue instead to simplify property accesses later with object-id values + key-value...
+    pub env_v: JSValue, // ! FIXME: use JSValue instead to simplify property accesses later with object-id values + key-value...
     pub callee_p: *mut JSObjectWrap, // ! FIXME: use JSValue
     pub caller_rip: *const Instruction,
     pub caller_icp: *mut InlineCache,
@@ -56,7 +56,7 @@ pub struct CallFrame {
 impl Default for CallFrame {
     fn default() -> Self {
         Self {
-            this_p: JSValue::Undefined,
+            env_v: JSValue::Undefined,
             callee_p: std::ptr::null_mut(),
             caller_rip: std::ptr::null(),
             caller_icp: std::ptr::null_mut(),
@@ -112,7 +112,7 @@ impl JSContext {
         ))))).unwrap();
 
         let mut first_frame = CallFrame {
-            this_p: JSValue::Undefined,
+            env_v: JSValue::ObjectId(first_env_id),
             callee_p: std::ptr::null_mut(),
             caller_rip: std::ptr::null(),
             caller_icp: std::ptr::null_mut(),
@@ -121,7 +121,7 @@ impl JSContext {
             callee_bp: 1
         };
 
-        first_frame.this_p = JSValue::ObjectId(first_env_id);
+        first_frame.env_v = JSValue::ObjectId(first_env_id);
 
         Self {
             heap: std::mem::take(&mut program.heap),
@@ -145,6 +145,9 @@ impl JSContext {
 
                 temp_stack.resize(stack_sizing, JSValue::undefined());
 
+                // ? NOTE: Set `globalThis` to reference the global environment object (reserved at stack[CALLEE_BP - 1]).
+                temp_stack[0] = JSValue::ObjectId(first_env_id);
+
                 temp_stack
             },
             top_code: program.top_level,
@@ -160,11 +163,11 @@ impl JSContext {
     }
 
     pub fn get_curr_env(&self) -> JSValue {
-        self.frames.last().expect("Expected available environment at ctx.rs ~ get_curr_env").this_p
+        self.frames.last().expect("Expected available environment at ctx.rs ~ get_curr_env").env_v
     }
 
     pub fn create_child_env(&mut self) -> JSValue {
-        let current_env_v = self.frames.last().expect("Expected available environment at ctx.rs ~ create_child_env").this_p;
+        let current_env_v = self.frames.last().expect("Expected available environment at ctx.rs ~ create_child_env").env_v;
 
         if let Some(new_env_oid) = self.heap.add_item(Some(Rc::new(RefCell::new(JSObjectWrap::Exotic(
             ExoticObject {
@@ -180,6 +183,18 @@ impl JSContext {
             self.status = EvalStatus::BadAlloc;
             JSValue::Undefined
         }
+    }
+
+    pub fn create_blank_obj(&mut self) -> JSValue {
+        let Some(prepared_oid) = self.heap.add_item(Some(Rc::new(RefCell::new(
+            JSObjectWrap::Exotic(
+                ExoticObject::default()
+            )
+        )))) else {
+            return JSValue::Undefined;
+        };
+
+        JSValue::ObjectId(prepared_oid)
     }
 
     /// ### ABOUT

@@ -1,5 +1,7 @@
 use std::fmt::Display;
 
+use crate::runtime::objects::{JS_OBJECT_COST, JSObjPtr, ItemPool};
+
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum JSVTag {
@@ -65,6 +67,22 @@ impl JSValue {
 
     pub fn is_null(&self) -> bool {
         matches!(*self, Self::Null)
+    }
+
+    pub fn is_exotic_obj_ref(&self, heap: &ItemPool<JSObjPtr, JS_OBJECT_COST>) -> bool {
+        if let Some(oid) = self.get_obj_id() && let Some(obj_ref) = heap.get_item(oid) {
+            return obj_ref.borrow().as_object().is_some();
+        }
+
+        false
+    }
+
+    pub fn is_func_ref(&self, heap: &ItemPool<JSObjPtr, JS_OBJECT_COST>) -> bool {
+        if let Some(oid) = self.get_obj_id() && let Some(obj_ref) = heap.get_item(oid) {
+            return obj_ref.borrow().as_func().is_some();
+        }
+
+        false
     }
 
     pub fn get_boolean(&self) -> bool {

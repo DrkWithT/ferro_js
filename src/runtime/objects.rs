@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell};
 
 use crate::runtime::values::JSValue;
 use crate::runtime::funcs::JSFunction;
-use crate::runtime::ctx::JSContext;
+use crate::runtime::ctx::{JSContext};
 
 pub const DUD_SHAPE_ID: i32 = 0;
 pub const DEFAULT_SHAPE_POPULATION: usize = 4096;
@@ -88,6 +88,16 @@ pub enum PropFlag {
     Writable = (1 << 0),
     Enumerable = (1 << 1),
     Configurable = (1 << 2),
+    IsAccessor = (1 << 4),
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AddPropHint {
+    Noop,
+    Data,
+    Getter,
+    Setter,
 }
 
 #[derive(Debug, Clone)]
@@ -202,7 +212,33 @@ impl JSObjectWrap {
         None
     }
 
-    pub fn get_property_data_value(&self, ctx: &mut JSContext, key_id: usize, ic_id: u16) -> Option<JSValue> {
+    pub fn check_property_is_accessor(&self, ctx: &JSContext, key_id: usize) -> bool {
+        let my_data = self.as_object().expect("Expected valid object ref at objects.rs ~ check_property_is_accessor");
+        let my_shape_id = my_data.shape;
+
+        let prop_offset = if let Some(slow_prop_ref) = ctx.shapes.fetch(my_shape_id) {
+            slow_prop_ref.resolve_offset(key_id)
+        } else { None };
+
+        let parent_env_oid = my_data.in_proto.get_obj_id();
+
+        if prop_offset.is_none() {
+            if let Some(parent_obj) = ctx.heap.get_item(parent_env_oid.unwrap_or(DUD_POOL_ID)) {
+                unsafe {
+                    return parent_obj.as_ptr().as_ref_unchecked().check_property_is_accessor(ctx, key_id);
+                }
+            } else if parent_env_oid.is_none() {
+                return false;
+            }
+        }
+
+        match &my_data.props.get(prop_offset.unwrap()).unwrap().body {
+            PropBody::Data(_) => false,
+            PropBody::Accessor((_, _)) => true
+        }
+    }
+
+    pub fn get_property_data_value(&self, ctx: &mut JSContext, key_id: usize, ic_id: u16, try_use_getter: bool) -> Option<JSValue> {
         let my_data = self.as_object()?;
         let my_shape_id = my_data.shape;
 
@@ -222,7 +258,7 @@ impl JSObjectWrap {
         if prop_offset.is_none() {
             if let Some(parent_obj) = ctx.heap.get_item(parent_env_oid.unwrap_or(DUD_POOL_ID)) {
                 unsafe { // ! TODO: fix unwrap panic here... is the env parent / prototype real?
-                    return parent_obj.as_ptr().as_mut_unchecked().get_property_data_value(ctx, key_id, ic_id);
+                    return parent_obj.as_ptr().as_mut_unchecked().get_property_data_value(ctx, key_id, ic_id, try_use_getter);
                 }
             } else if parent_env_oid.is_none() {
                 return None;
@@ -237,7 +273,7 @@ impl JSObjectWrap {
 
         match &my_data.props.get(prop_offset.unwrap()).unwrap().body {
             PropBody::Data(prop_v) => Some(*prop_v),
-            PropBody::Accessor((_, _)) => None
+            PropBody::Accessor((get_fn, set_fn)) => Some(if try_use_getter {*get_fn} else {*set_fn})
         }
     }
 
@@ -273,11 +309,12 @@ impl JSObjectWrap {
 
         match &mut my_data.props.get_mut(prop_offset.unwrap()).unwrap().body {
             PropBody::Data(prop_v) => Some(prop_v),
-            _ => None
+            // TODO: "invoke" this back in the opcode to evaluate getter logic.
+            PropBody::Accessor((getter, _)) => Some(getter)
         }
     }
 
-    pub fn set_property_data_mut(&mut self, ctx: &mut JSContext, key_id: usize, ic_id: u16, arg: &JSValue) -> bool {
+    pub fn set_property_data_mut(&mut self, ctx: &mut JSContext, key_id: usize, ic_id: u16, hint: AddPropHint, arg: &JSValue) -> bool {
         let Some(my_data) = self.as_object_mut() else { return false; };
         let my_shape_id = my_data.shape;
 
@@ -310,7 +347,7 @@ impl JSObjectWrap {
             }
 
             my_data.props.push(Property {
-                body: PropBody::Data(*arg),
+                body: if hint == AddPropHint::Data {PropBody::Data(*arg)} else {PropBody::Accessor((JSValue::Undefined, JSValue::Undefined))},
                 flags: PropFlag::Writable as u8 | PropFlag::Configurable as u8
             });
         }
@@ -326,8 +363,14 @@ impl JSObjectWrap {
                 *prop_v = *arg;
                 true
             },
-            _ => {
-                false
+            PropBody::Accessor((getter, setter)) => {
+                if hint == AddPropHint::Getter {
+                    *getter = *arg;
+                } else {
+                    *setter = *arg;
+                }
+
+                true
             }
         }
     }
