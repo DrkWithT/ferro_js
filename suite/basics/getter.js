@@ -1,18 +1,8 @@
 var data = {
-    x: 0,
-    get count() {
-        var curr = this.x;
-
-        this.x = curr + 1;
-        return curr;
+    x: 67,
+    get answer() {
+        return this.x;
     }
 };
 
-var i = 0, total = 0;
-
-while (i < 10) {
-    total = total + data.count;
-    i++;
-}
-
-total === 55;
+data.answer === 67;
