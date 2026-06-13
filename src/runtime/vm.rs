@@ -427,7 +427,7 @@ unsafe fn op_force_num(context: &mut JSContext, stack: *mut JSValue) {
             JSValue::StringId(sid) => {
                 // By the JS specification: +"..." will try a parsing conversion to a number.
                 if let Some(sv) = context.spool.get_item(*sid) {
-                    str::parse::<f64>(sv.as_ptr().as_ref().expect("Expected valid string by ID at vm.rs: op_force_num")).unwrap_or(f64::NAN)
+                    str::parse::<f64>(sv).unwrap_or(f64::NAN)
                 } else {
                     f64::NAN
                 }

@@ -1,6 +1,6 @@
 use std::collections::{HashMap};
 use std::rc::Rc;
-use std::cell::{Cell, RefCell};
+use std::cell::{RefCell};
 
 use crate::runtime::values::JSValue;
 use crate::runtime::funcs::JSFunction;
@@ -385,7 +385,8 @@ impl JSObjectWrap {
 
 
 pub type JSObjPtr = Option<Rc<RefCell<JSObjectWrap>>>;
-pub type JSStrPtr = Option<Rc<Cell<String>>>;
+pub type JSStrPtr = Option<Box<String>>;
+pub type JSStrRef<'src_str_lt> = Option<&'src_str_lt str>;
 
 
 #[derive(Default)]
@@ -520,12 +521,12 @@ impl ItemPool<JSStrPtr, JS_STRING_COST> {
         self.tenure_count = self.next_id + 1;
     }
 
-    pub fn get_item(&self, str_id: i32) -> JSStrPtr {
+    pub fn get_item(&self, str_id: i32) -> JSStrRef<'_> {
         if str_id < 0 || str_id as usize >= self.items.len() {
             return None;
         }
 
-        self.items.get(str_id as usize).unwrap().clone()
+        Some(self.items.get(str_id as usize).unwrap().as_deref().unwrap())
     }
 
     pub fn add_item(&mut self, value: JSStrPtr) -> Option<i32> {

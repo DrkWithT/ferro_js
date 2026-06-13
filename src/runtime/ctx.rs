@@ -206,11 +206,7 @@ impl JSContext {
             JSValue::Boolean(b) => if *b {1.0} else {0.0},
             JSValue::Number(x) => *x,
             JSValue::StringId(sid) => {
-                let text = if let Some(str_cell) = self.spool.get_item(*sid).as_deref() {
-                    unsafe {str_cell.as_ptr().as_ref().expect("Expected valid string pool ID at ctx.rs: jsvalue_to_number").as_str()}
-                } else {
-                    "NAN"
-                }.trim();
+                let text = self.spool.get_item(*sid).unwrap_or("NAN");
 
                 let is_signed = text.chars().nth(0).unwrap() == '-';
 
@@ -244,12 +240,10 @@ impl JSContext {
     }
 
     pub fn jsvalue_to_boolean(&self, v: &JSValue) -> bool {
-        unsafe {
-            if let Some(sid) = v.get_str_id() {
-                !self.spool.get_item(sid).as_ref().expect("Expected valid, interned string reference in vm.rs ~ jsvalue_to_boolean").as_ptr().as_ref_unchecked().is_empty()
-            } else {
-                v.get_boolean()
-            }
+        if let Some(sid) = v.get_str_id() {
+            !self.spool.get_item(sid).as_ref().expect("Expected valid, interned string reference in vm.rs ~ jsvalue_to_boolean").is_empty()
+        } else {
+            v.get_boolean()
         }
     }
 

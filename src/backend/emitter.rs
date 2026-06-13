@@ -1,6 +1,6 @@
 use std::collections::{HashMap};
 use std::rc::Rc;
-use std::cell::{Cell, RefCell/*, RefCell*/};
+use std::cell::{RefCell};
 
 use crate::frontend::{
     token::{TokenKind, Token},
@@ -255,9 +255,7 @@ impl Emitter {
         
         let real_string_symbol = if is_key { format!("[[{s}]]") } else { s.to_owned() };
         let real_string = s.to_owned();
-        let real_string: JSStrPtr = Some(Rc::new(Cell::new(
-            real_string
-        )));
+        let real_string: JSStrPtr = Some(Box::new(real_string));
 
         if let Some(sid) = self.spool.add_item(real_string) {
             let temp_info = SymbolInfo {
