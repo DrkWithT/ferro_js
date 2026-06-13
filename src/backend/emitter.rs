@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell/*, RefCell*/};
 
 use crate::frontend::{
     token::{TokenKind, Token},
-    ast::{Operator, SyntaxId, SyntaxData, SyntaxNode, AST},
+    ast::{Operator, SyntaxId, SyntaxData, SyntaxNode, PropDecl, PropDeclTag, AST},
 };
 
 use crate::runtime::code::InlineCache;
@@ -85,8 +85,9 @@ pub enum EmitterFlag {
     HandleUnarySpecials = (1 << 7),
     /// Does a member access for a callee need its `thisArg` filled?
     HasThisArg = (1 << 8),
+    InMethod = (1 << 9),
     /// Has the sub-AST compilation succeeded?
-    IsVisitOK = (1 << 9),
+    IsVisitOK = (1 << 10),
 }
 
 #[derive(Default, Clone, Copy)]
@@ -148,10 +149,16 @@ impl Emitter {
     }
 
     fn put_ic_of_inst(&mut self, inst_pos: i32) {
-        let next_ic_id = self.chunks.last().expect("Expected available chunk at emitter.rs ~ line#154.").icaches.len() as u16;
+        let next_ic_id = self.chunks.last().expect("Expected available chunk at emitter.rs ~ put_ic_of_inst.").icaches.len() as u16;
 
         self.chunks.last_mut().unwrap().icaches.push(InlineCache::default());
         self.chunks.last_mut().unwrap().code[inst_pos as usize].flags |= next_ic_id;
+    }
+
+    #[allow(unused)]
+    fn put_dead_ic_of_inst(&mut self, inst_pos: i32) {
+        self.chunks.last_mut().unwrap().icaches.push(InlineCache::dead());
+        self.chunks.last_mut().unwrap().code[inst_pos as usize].flags |= u16::MAX;
     }
 
     fn emit_nonary_inst(&mut self, op: Opcode, flags: u16) -> i32 {
@@ -211,6 +218,10 @@ impl Emitter {
     }
 
     fn resolve_constant(&self, s: &str) -> Option<SymbolInfo> {
+        if s.is_empty() {
+            return None;
+        }
+        
         let current_scope = self.scopes.last().expect("Expected pushed scope at Emitter::resolve_constant()!");
 
         if let Some(info) = current_scope.symbols.get(s).copied() && info.tag == SymbolTag::Constant {
@@ -293,7 +304,10 @@ impl Emitter {
                 tag: SymbolTag::Constant,
             };
 
-            current_scope.symbols.insert(s.to_owned(), temp_info);
+            if !s.is_empty() {
+                current_scope.symbols.insert(s.to_owned(), temp_info);
+            }
+
             current_scope.next_const_id += 1;
             self.chunks.last_mut().expect("Expected available chunk for Emitter::record_constant()!").consts.push(v);
 
@@ -323,7 +337,7 @@ impl Emitter {
                 Opcode::Ret,
                 false, // Continue-generation flag: If off, exit this function early.
             )
-        } else if !name_in_locator && !name_in_access && name_lacks_env {  // ! add missing case for "in_locator" for simple, stack-offset local names...
+        } else if !name_in_locator && !name_in_access && name_lacks_env {
             self.capturing_names.insert(lexeme.to_owned());
             (
                 self.resolve_local(lexeme).or_else(|| {
@@ -333,6 +347,7 @@ impl Emitter {
                 !needs_special_updating,
             )
         } else if !name_in_locator && name_in_access && !name_lacks_env {
+            // println!("Debug: emitter.rs ~ emit_name: non-locator & in-access & complex-fn");
             (
                 self.resolve_global_string(lexeme, true).or_else(|| {
                     self.record_global_string(lexeme, true)
@@ -341,6 +356,17 @@ impl Emitter {
                 !needs_special_updating,
             )
         } else if name_in_locator && !name_in_access && !name_lacks_env {
+            // println!("Debug: emitter.rs ~ emit_name: locator & in-access & complex-fn");
+            // ? Skip emission of LHS for assignment exprs to prevent a messy stack situation... Just put its environment object key.
+            (
+                self.resolve_global_string(lexeme, true).or_else(|| {
+                    self.record_global_string(lexeme, true)
+                }),
+                Opcode::PushStr,
+                !needs_special_updating,
+            )
+        } else if !name_in_locator && name_in_access && name_lacks_env {
+            // println!("Debug: emitter.rs ~ emit_name: locator & in-access & simple-fn");
             // ? Skip emission of LHS for assignment exprs to prevent a messy stack situation... Just put its environment object key.
             (
                 self.resolve_global_string(lexeme, true).or_else(|| {
@@ -350,7 +376,7 @@ impl Emitter {
                 !needs_special_updating,
             )
         } else {
-            eprintln!("\n\tNote: unhandled type of named-expr at ~ line#{}", self.line);
+            dbg!(name_in_locator, name_in_access, name_lacks_env);
             (
                 None,
                 Opcode::Ret,
@@ -479,16 +505,58 @@ impl Emitter {
         }
     }
 
-    #[allow(unused)]
-    fn emit_object_expr(&mut self, source: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
-        if hints.get_flag(EmitterFlag::CheckFnIsSimple) || hints.get_flag(EmitterFlag::PrepassVars) {
-            // ! FIXME: simplicity check should check each item for foreign names.
+    fn emit_object_expr(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        let SyntaxData::ObjectExpr { props } = node else {
+            return hints.without_flag(EmitterFlag::IsVisitOK);
+        };
+
+        if hints.get_flag(EmitterFlag::CheckFnIsSimple) {
+            for prop_decl in props {
+                let _ = self.emit_node(src_text, prop_decl.initializer.as_ref(), ast, hints);
+            }
+
             return hints;
         }
 
-        hints.without_flag(EmitterFlag::IsVisitOK) // todo: implement AFTER object literal support in parser.
+        if hints.get_flag(EmitterFlag::PrepassVars) {
+            return hints;
+        }
+
+        // ! FIXME: Add support for intrinsic IDs of included prototypes, etc. used here. An example would be Array's ctor ref and `Array.prototype`!
+        self.emit_nonary_inst(Opcode::MakeObj, 0);
+
+        for (prop_pos, PropDecl { initializer, name_tk_id, tag }) in props.iter().enumerate() {
+            let temp_key_tk = ast.tokens.get(*name_tk_id).unwrap();
+            let temp_key_str = temp_key_tk.to_str(src_text);
+
+            let Some(key_sid) = self.record_global_string(temp_key_str, true) else { return hints.without_flag(EmitterFlag::IsVisitOK); };
+
+            self.emit_unary_inst(Opcode::PushStr, key_sid.id, 0);
+
+            if !self.emit_node(src_text, initializer, ast, hints.without_flag(EmitterFlag::InLocator).with_flag(EmitterFlag::InMethod)).check_ok() {
+                eprintln!("\n\tNote: Invalid property decl #{} found in object at source:{}", prop_pos, self.line);
+                return hints.without_flag(EmitterFlag::IsVisitOK);
+            }
+
+            let set_prop_ip = match *tag {
+                PropDeclTag::Data => {
+                    self.emit_unary_inst(Opcode::SetProp, 1, 0)
+                },
+                PropDeclTag::Getter => {
+                    self.emit_unary_inst(Opcode::SetProp, 2, 0)
+                },
+                PropDeclTag::Setter => {
+                    self.emit_unary_inst(Opcode::SetProp, 3, 0)
+                }
+            };
+
+            self.put_ic_of_inst(set_prop_ip);
+        }
+
+        hints
     }
 
+    // TODO: test later, arrays not implemented for now.
     fn emit_array_expr(&mut self, source: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
         if hints.get_flag(EmitterFlag::CheckFnIsSimple) || hints.get_flag(EmitterFlag::PrepassVars) {
             // ! FIXME: simplicity check should check each item for foreign names.
@@ -503,22 +571,86 @@ impl Emitter {
 
         let SyntaxData::ArrayExpr {items} = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
+        #[allow(unused)]
         for (item_pos, item) in items.iter().enumerate() {
             if !self.emit_node(source, item.as_ref(), ast, hints).check_ok() {
                 hints.without_flag(EmitterFlag::IsVisitOK);
             }
 
-            let set_arr_item_ip = self.emit_unary_inst(Opcode::SetOwnProp, item_pos as i32, 0);
-            self.put_ic_of_inst(set_arr_item_ip);
+            // ! FIXME: implement after note is followed.
+            todo!("Implement arrays after object mechanics for accessors work!!");
+            // TODO: Call Array ctor here when intrinsic mapping is implemented.
         }
 
         hints
     }
 
-    #[allow(unused)]
-    fn emit_lambda(&mut self, source: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
-        // todo: implement AFTER object support!
-        hints.without_flag(EmitterFlag::IsVisitOK)
+    fn emit_lambda(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        let SyntaxData::Lambda { params, body } = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
+
+        if hints.get_flag(EmitterFlag::PrepassVars) {
+            return hints;
+        }
+
+        // ? Pre-check during generation via prepass: if there's captured names / closure returns, an environment is needed at runtime for the function (now considered complex).
+        let func_is_simple = self.emit_node(src_text, body, ast, hints.with_flag(EmitterFlag::CheckFnIsSimple)).get_flag(EmitterFlag::IsFuncSimple) || hints.get_flag(EmitterFlag::InMethod);
+
+        let func_specific_hints = if func_is_simple {
+            hints.with_flag(EmitterFlag::IsFuncSimple)
+        } else {
+            hints.without_flag(EmitterFlag::IsFuncSimple)
+        };
+
+        self.scopes.push(SymbolScope {
+            symbols: HashMap::<String, SymbolInfo>::default(),
+            next_local_id: 1,
+            next_const_id: 0,
+            next_ic_id: 0
+        });
+
+        self.chunks.push(Chunk::default());
+
+        for (param_pos, param_tk_pos) in params.iter().enumerate() {
+            let param_name = ast.tokens[*param_tk_pos].to_string(src_text);
+
+            if func_is_simple {
+                let _ = self.record_local(param_name.as_str());
+            } else {
+                // ? NOTE: For complex lambdas, copies of real argument values are stored in the environment as needed, leaving the old argument values preserved for the Arguments object later.
+                let param_key_sid = self.record_global_string(param_name.as_str(), true).expect("Expected valid env-key info for param at emitter.rs ~ emit_lambda at params.");
+
+                self.emit_unary_inst(Opcode::PushStr, param_key_sid.id, 0);
+                self.emit_unary_inst(Opcode::GetLocal, param_pos as i32 + 1, 0);
+                self.emit_nonary_inst(Opcode::SetVar, 0);
+            }
+        }
+
+        if !self.emit_node(src_text, body, ast, func_specific_hints).check_ok() {
+            self.scopes.pop();
+            return hints.without_flag(EmitterFlag::IsVisitOK);
+        }
+
+        let func_code = self.chunks.pop().unwrap();
+
+        let Some(func_oid) = self.heap.add_item(Some(Rc::new(RefCell::new(
+            JSObjectWrap::Func(
+                JSFunction::bcode(
+                    ExoticObject::default(),
+                    func_code,
+                    params.len() as u16,
+                    !func_is_simple,
+                    false
+                )
+            )
+        )))) else { return hints.without_flag(EmitterFlag::IsVisitOK); };
+
+        self.scopes.pop();
+
+        let Some(func_const_id) = self.record_constant("", JSValue::ObjectId(func_oid)) else { return hints.without_flag(EmitterFlag::IsVisitOK); };
+
+        self.emit_unary_inst(Opcode::PushConst, func_const_id.id, 0);
+
+        hints
     }
 
     fn emit_lhs(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, mut hints: EmitterHints) -> EmitterHints {
@@ -551,14 +683,14 @@ impl Emitter {
         }
 
         for (access_pos, (access_direct, access_expr)) in accesses.iter().enumerate() {            
-            if !self.emit_node(src_text, access_expr, ast, hints.without_flag(EmitterFlag::InLocator)).check_ok() {
+            if !self.emit_node(src_text, access_expr, ast, hints.without_flag(EmitterFlag::InLocator).with_flag(EmitterFlag::InAccess)).check_ok() {
                 eprintln!("\n\tNote: check LHS {0} access #{access_pos} around line {1}.", if *access_direct {"[key]"} else {"'.'"}, self.line);
                 return hints.without_flag(EmitterFlag::IsVisitOK);
             }
 
             // ? Leave the last emitted key for LHS accesses, as there's SET_PROP VM opcodes that require that temporary value!
-            if !hints.get_flag(EmitterFlag::InLocator) {
-                let get_prop_ip = self.emit_nonary_inst(Opcode::GetProp, 0);
+            if !hints.get_flag(EmitterFlag::InLocator) || access_pos != accesses.len() - 1 {
+                let get_prop_ip = self.emit_unary_inst(Opcode::GetProp, 1, 0);
 
                 self.put_ic_of_inst(get_prop_ip);
             } else {
@@ -846,7 +978,7 @@ impl Emitter {
             eprintln!("\n\tNote: Invalid destination of assign-expr.");
             return hints.without_flag(EmitterFlag::IsVisitOK);
         }
-   
+
         if !self.emit_node(src_text, src, ast, hints.without_flag(EmitterFlag::InLocator)).check_ok() {
             eprintln!("\n\tNote: Invalid source of assign-expr.");
             return hints.without_flag(EmitterFlag::IsVisitOK);
@@ -856,8 +988,6 @@ impl Emitter {
             let set_prop_ic_ip = self.emit_nonary_inst(Opcode::SetProp, 0);
 
             self.put_ic_of_inst(set_prop_ic_ip);
-            // ! FIXME: if this emitter fn is called in an emit_function_decl() AND any names need an env:
-            // ! ...rely on passed flags to have IsFuncSimple = OFF.
         } else if let Some(saved_local_info) = self.cached_info && hints.get_flag(EmitterFlag::IsFuncSimple) {
             self.emit_unary_inst(Opcode::SetLocal, saved_local_info.id, 0);
         } else {
@@ -1243,9 +1373,9 @@ impl Emitter {
         match node_data {
             SyntaxData::Nil => self.emit_nil_node(src_text, node_data, ast, hints),
             SyntaxData::Literal(_) => self.emit_literal(src_text, node_data, ast, hints),
-            // SyntaxData::ObjectExpr { .. } => self.emit_object_expr(src_text, node_data, ast, hints),
+            SyntaxData::ObjectExpr { .. } => self.emit_object_expr(src_text, node_data, ast, hints),
             SyntaxData::ArrayExpr { .. } => self.emit_array_expr(src_text, node_data, ast, hints),
-            // SyntaxData::Lambda { .. } => self.emit_object_expr(src_text, node_data, ast, hints),
+            SyntaxData::Lambda { .. } => self.emit_lambda(src_text, node_data, ast, hints),
             SyntaxData::Lhs { .. } => self.emit_lhs(src_text, node_data, ast, hints),
             SyntaxData::Unary { .. } => self.emit_unary(src_text, node_data, ast, hints),
             SyntaxData::Binary { .. } => self.emit_binary(src_text, node_data, ast, hints),
