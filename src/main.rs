@@ -4,7 +4,20 @@ pub mod runtime;
 
 use std::{env::args, fs::read_to_string, process::ExitCode};
 
-use crate::{backend::emitter::Emitter, frontend::{ast::AST, lexer::Lexer, parser::Parser, token::TokenKind}, runtime::{code::dump_bytecode, ctx::{JSContext, EvalStatus}, objects::DEFAULT_SHAPE_POPULATION, vm::{DEFAULT_JS_RECUR_LIMIT, DEFAULT_JS_STACK_SIZE, run_vm}}};
+use crate::{
+    backend::emitter::Emitter, frontend::{
+        ast::AST, lexer::Lexer, parser::Parser, token::TokenKind
+    },
+    runtime::{
+        code::dump_bytecode, ctx::{
+            JSContext, EvalStatus
+        },
+        shape::DEFAULT_SHAPE_POPULATION,
+        vm::{
+            DEFAULT_JS_RECUR_LIMIT, DEFAULT_JS_STACK_SIZE, run_vm
+        }
+    }
+};
 
 
 const RUNTIME_NAME: &str = "    ______                    \n   / ____/__  ______________  \n  / /_  / _ \\/ ___/ ___/ __ \\ \n / __/ /  __/ /  / /  / /_/ / \n/_/    \\___/_/  /_/   \\____/ \n";
