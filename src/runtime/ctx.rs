@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use crate::runtime::values::JSValue;
 use crate::runtime::code::{Instruction, InlineCache, Chunk, Program};
-use crate::runtime::objects::{DUD_SHAPE_ID, ExoticObject, ItemPool, JS_OBJECT_COST, JS_STRING_COST, JSObjPtr, JSObjectWrap, JSStrPtr, Shape, ShapePool};
+use crate::runtime::objects::{DUD_POOL_ID, DUD_SHAPE_ID, ExoticObject, ItemPool, JS_OBJECT_COST, JS_STRING_COST, JSObjPtr, JSObjectWrap, JSStrPtr, Shape, ShapePool};
 
 /// ### ABOUT
 /// Indicates status of VM execution. See each enum member for a quick description.
@@ -44,9 +44,10 @@ pub struct CallFrame {
     ///  - 1: Holds a new object environment upon ctor calls.
     ///  - 2: Holds a custom `this` Value from `Function.call()`.
     ///  - 3: If `use strict` applies, do not coerce `this` to globalThis. Otherwise, do so.
-    pub this_p: JSValue, // ! FIXME: use JSValue instead to simplify property accesses later with object-id values + key-value...
+    pub env_v: JSValue, // ! FIXME: use JSValue instead to simplify property accesses later with object-id values + key-value...
     pub callee_p: *mut JSObjectWrap, // ! FIXME: use JSValue
     pub caller_rip: *const Instruction,
+    pub caller_icp: *mut InlineCache,
     pub caller_cvp: *const JSValue,
     pub caller_bp: i32,
     pub callee_bp: i32,
@@ -55,9 +56,10 @@ pub struct CallFrame {
 impl Default for CallFrame {
     fn default() -> Self {
         Self {
-            this_p: JSValue::Undefined,
+            env_v: JSValue::Undefined,
             callee_p: std::ptr::null_mut(),
             caller_rip: std::ptr::null(),
+            caller_icp: std::ptr::null_mut(),
             caller_cvp: std::ptr::null(),
             caller_bp: 0,
             callee_bp: 0,
@@ -110,15 +112,16 @@ impl JSContext {
         ))))).unwrap();
 
         let mut first_frame = CallFrame {
-            this_p: JSValue::Undefined,
+            env_v: JSValue::ObjectId(first_env_id),
             callee_p: std::ptr::null_mut(),
             caller_rip: std::ptr::null(),
-            caller_cvp: start_cvp,
+            caller_icp: std::ptr::null_mut(),
+            caller_cvp: std::ptr::null(),
             caller_bp: 0,
-            callee_bp: 0
+            callee_bp: 1
         };
 
-        first_frame.this_p = JSValue::ObjectId(first_env_id);
+        first_frame.env_v = JSValue::ObjectId(first_env_id);
 
         Self {
             heap: std::mem::take(&mut program.heap),
@@ -142,18 +145,56 @@ impl JSContext {
 
                 temp_stack.resize(stack_sizing, JSValue::undefined());
 
+                // ? NOTE: Set `globalThis` to reference the global environment object (reserved at stack[CALLEE_BP - 1]).
+                temp_stack[0] = JSValue::ObjectId(first_env_id);
+
                 temp_stack
             },
             top_code: program.top_level,
             ip: start_ip,
             icp: start_icp,
             cvp: start_cvp,
-            bp: 0,
-            sp: 1,
+            bp: 1,
+            sp: 1, // ! NOTE: maybe adjust this?
             cd: 1,
             cm: calls_max,
             status: EvalStatus::Pending
         }
+    }
+
+    pub fn get_curr_env(&self) -> JSValue {
+        self.frames.last().expect("Expected available environment at ctx.rs ~ get_curr_env").env_v
+    }
+
+    pub fn create_child_env(&mut self) -> JSValue {
+        let current_env_v = self.frames.last().expect("Expected available environment at ctx.rs ~ create_child_env").env_v;
+
+        if let Some(new_env_oid) = self.heap.add_item(Some(Rc::new(RefCell::new(JSObjectWrap::Exotic(
+            ExoticObject {
+                props: vec![],
+                items: vec![],
+                in_proto: current_env_v,
+                out_proto: JSValue::Undefined,
+                shape: 0,
+            }
+        ))))) {
+            JSValue::ObjectId(new_env_oid)
+        } else {
+            self.status = EvalStatus::BadAlloc;
+            JSValue::Undefined
+        }
+    }
+
+    pub fn create_blank_obj(&mut self) -> JSValue {
+        let Some(prepared_oid) = self.heap.add_item(Some(Rc::new(RefCell::new(
+            JSObjectWrap::Exotic(
+                ExoticObject::default()
+            )
+        )))) else {
+            return JSValue::Undefined;
+        };
+
+        JSValue::ObjectId(prepared_oid)
     }
 
     /// ### ABOUT
@@ -165,11 +206,7 @@ impl JSContext {
             JSValue::Boolean(b) => if *b {1.0} else {0.0},
             JSValue::Number(x) => *x,
             JSValue::StringId(sid) => {
-                let text = if let Some(str_cell) = self.spool.get_item(*sid).as_deref() {
-                    unsafe {str_cell.as_ptr().as_ref().expect("Expected valid string pool ID at ctx.rs: jsvalue_to_number").as_str()}
-                } else {
-                    "NAN"
-                }.trim();
+                let text = self.spool.get_item(*sid).unwrap_or("NAN");
 
                 let is_signed = text.chars().nth(0).unwrap() == '-';
 
@@ -203,12 +240,10 @@ impl JSContext {
     }
 
     pub fn jsvalue_to_boolean(&self, v: &JSValue) -> bool {
-        unsafe {
-            if let Some(sid) = v.get_str_id() {
-                !self.spool.get_item(sid).as_ref().expect("Expected valid, interned string reference in vm.rs ~ jsvalue_to_boolean").as_ptr().as_ref_unchecked().is_empty()
-            } else {
-                v.get_boolean()
-            }
+        if let Some(sid) = v.get_str_id() {
+            !self.spool.get_item(sid).as_ref().expect("Expected valid, interned string reference in vm.rs ~ jsvalue_to_boolean").is_empty()
+        } else {
+            v.get_boolean()
         }
     }
 
@@ -235,6 +270,24 @@ impl JSContext {
             raw_num as u32
         } else {
             f64::floor(raw_num) as u32
+        }
+    }
+
+    /// ### ABOUT
+    /// Implements a subset of Strict Equality algorithm for same typed values. This is a helper function for both strict equality and loose equality opcodes.
+    pub fn jsvalue_test_same_types_eq(&self, lhs: &JSValue, rhs: &JSValue) -> bool {
+        unsafe {
+            match lhs {
+                JSValue::Undefined | JSValue::Null => true,
+                JSValue::Boolean(lhs_bool) => *lhs_bool == rhs.get_boolean(),
+                JSValue::Number(f_value) => *f_value == rhs.get_number().unwrap_or(f64::NAN),
+                JSValue::StringId(lhs_sid) => if *lhs_sid == rhs.get_str_id().unwrap_or(DUD_POOL_ID) {
+                    true
+                } else {
+                    self.spool.get_item(*lhs_sid).unwrap().as_ptr().as_ref().expect("Expected valid interned string of LHS at vm.rs: op_strict_eq") == self.spool.get_item(rhs.get_str_id().unwrap()).unwrap().as_ptr().as_ref().expect("Expected valid interned string of RHS at vm.rs: op_strict_eq")
+                },
+                JSValue::ObjectId(lhs_oid) => *lhs_oid == rhs.get_obj_id().unwrap_or(DUD_POOL_ID)
+            }
         }
     }
 }

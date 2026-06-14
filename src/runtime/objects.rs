@@ -1,10 +1,10 @@
 use std::collections::{HashMap};
 use std::rc::Rc;
-use std::cell::{Cell, RefCell};
+use std::cell::{RefCell};
 
 use crate::runtime::values::JSValue;
 use crate::runtime::funcs::JSFunction;
-use crate::runtime::ctx::JSContext;
+use crate::runtime::ctx::{JSContext};
 
 pub const DUD_SHAPE_ID: i32 = 0;
 pub const DEFAULT_SHAPE_POPULATION: usize = 4096;
@@ -14,7 +14,7 @@ pub struct Shape {
     /// Maps pre-calculated string hashes to property indices.
     pub entries: HashMap<usize, usize>,
     /// Maps pre-calculated string hashes of new properties to child Shapes.
-    pub links: Vec<(usize, i32)>,
+    pub links: HashMap<usize, i32>,
     pub parent: i32,
     /// NOTE: **MUST** be updated after this `Shape` is cloned from its parent.
     pub id: i32,
@@ -29,7 +29,7 @@ impl Default for Shape {
     fn default() -> Self {
         Self {
             entries: HashMap::default(),
-            links: vec![],
+            links: HashMap::default(),
             parent: DUD_SHAPE_ID,
             id: 0
         }
@@ -42,30 +42,22 @@ impl Shape {
     }
 
     pub fn resolve_subshape_id(&self, key_id: usize) -> Option<i32> {
-        for (link_key, child_id) in &self.links {
-            if *link_key == key_id {
-                return Some(*child_id);
-            }
-        }
-
-        None
+        self.links.get(&key_id).cloned()
     }
 
     /// Returns an existing shape for a new transition (additional property name to shape ID pair) ONLY IF the links has it.
     pub fn add_transition(&mut self, key_hash: usize, child_shape_id: i32) -> i32 {
-        if let Some((_, pre_link_child_shape_id)) = self.links.iter().find(|item| {
-            item.0 == key_hash
-        }) {
-            return *pre_link_child_shape_id;
+        if let Some(child_shape_id) = self.links.get(&key_hash) {
+            return *child_shape_id;
         }
 
-        self.links.push((key_hash, child_shape_id));
+        self.links.insert(key_hash, child_shape_id);
 
         child_shape_id
     }
 
     pub fn derive_child(&mut self, added_key: usize, child_shape_id: i32) -> Self {
-        self.links.push((added_key, child_shape_id));
+        self.links.insert(added_key, child_shape_id);
 
         Self {
             entries: {
@@ -75,7 +67,7 @@ impl Shape {
 
                 old_entries
             },
-            links: vec![],
+            links: HashMap::default(),
             parent: self.id,
             id: child_shape_id
         }
@@ -85,9 +77,20 @@ impl Shape {
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum PropFlag {
-    Writable,
-    Enumerable,
-    Configurable,
+    Writable = (1 << 0),
+    Enumerable = (1 << 1),
+    Configurable = (1 << 2),
+    HasGetter = (1 << 4),
+    HasSetter = (1 << 5)
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AddPropHint {
+    Noop,
+    Data,
+    Getter,
+    Setter,
 }
 
 #[derive(Debug, Clone)]
@@ -98,8 +101,61 @@ pub enum PropBody {
 
 #[derive(Debug, Clone)]
 pub struct Property {
-    pub body: PropBody,
-    pub flags: u8,
+    /// Stores `[[Value]]` or [[Get]] and `[[Set]]`.
+    pub body: [JSValue; 2],
+    pub flags: u8
+}
+
+impl Property {
+    pub fn data(v: &JSValue, flags: u8) -> Self {
+        Self {
+            body: [*v, JSValue::Undefined],
+            flags
+        }
+    }
+
+    pub fn accessor(getter: &JSValue, setter: &JSValue, flags: u8) -> Self {
+        Self {
+            body: [*getter, *setter],
+            flags: {
+                let mut temp_flags = flags;
+
+                if !getter.is_undefined() && !getter.is_null() {
+                    temp_flags |= PropFlag::HasGetter as u8;
+                }
+
+                if !setter.is_undefined() && !setter.is_null() {
+                    temp_flags |= PropFlag::HasSetter as u8;
+                }
+
+                temp_flags
+            }
+        }
+    }
+
+    pub fn is_writable(&self) -> bool {
+        0 != self.flags & PropFlag::Writable as u8
+    }
+
+    pub fn is_configurable(&self) -> bool {
+        0 != self.flags & PropFlag::Configurable as u8
+    }
+
+    pub fn is_enumerable(&self) -> bool {
+        0 != self.flags & PropFlag::Enumerable as u8
+    }
+
+    pub fn is_accessor(&self) -> bool {
+        (self.flags & (PropFlag::HasGetter as u8 | PropFlag::HasSetter as u8)) != 0
+    }
+
+    pub fn has_getter(&self) -> bool {
+        0 != (self.flags & PropFlag::HasGetter as u8)
+    }
+
+    pub fn has_setter(&self) -> bool {
+        0 != (self.flags & PropFlag::HasSetter as u8)
+    }
 }
 
 pub const JS_OBJECT_COST: usize = 56;
@@ -112,6 +168,18 @@ pub struct ExoticObject {
     pub in_proto: JSValue,
     pub out_proto: JSValue,
     pub shape: i32,
+}
+
+impl Default for ExoticObject {
+    fn default() -> Self {
+        Self {
+            props: vec![],
+            items: vec![],
+            in_proto: JSValue::Undefined,
+            out_proto: JSValue::Undefined,
+            shape: DUD_SHAPE_ID
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -162,19 +230,62 @@ impl JSObjectWrap {
         None
     }
 
-    pub fn get_property_data_value(&self, ctx: &mut JSContext, key_id: usize, ic_id: u16) -> Option<JSValue> {
+    pub fn check_property_is_accessor(&self, ctx: &JSContext, key_id: usize) -> bool {
+        let my_data = self.as_object().expect("Expected valid object ref at objects.rs ~ check_property_is_accessor");
+        let my_shape_id = my_data.shape;
+
+        let prop_offset = if let Some(slow_prop_ref) = ctx.shapes.fetch(my_shape_id) {
+            slow_prop_ref.resolve_offset(key_id)
+        } else { None };
+
+        let parent_env_oid = my_data.in_proto.get_obj_id();
+
+        if prop_offset.is_none() {
+            if let Some(parent_obj) = ctx.heap.get_item(parent_env_oid.unwrap_or(DUD_POOL_ID)) {
+                unsafe {
+                    return parent_obj.as_ptr().as_ref_unchecked().check_property_is_accessor(ctx, key_id);
+                }
+            } else if parent_env_oid.is_none() {
+                return false;
+            }
+        }
+
+        my_data.props.get(prop_offset.unwrap()).unwrap().is_accessor()
+    }
+
+    pub fn get_property_data_value(&self, ctx: &mut JSContext, key_id: usize, ic_id: u16, try_use_getter: bool) -> Option<JSValue> {
         let my_data = self.as_object()?;
         let my_shape_id = my_data.shape;
 
+        // dbg!(my_shape_id);
+
         let (prop_offset, ic_dirty) = unsafe {
             if let Some (ic_slot) = ctx.icp.add(ic_id as usize).as_mut().unwrap().find(my_shape_id, key_id) {
+                // println!("Debug: try IC...");
+                // dbg!(my_shape_id, key_id);
                 (Some(ic_slot), false)
             } else if let Some(slow_prop_ref) = ctx.shapes.fetch(my_shape_id) {
+                // println!("Debug: try Shape...");
+                // dbg!(my_shape_id, key_id);
                 (slow_prop_ref.resolve_offset(key_id), true)
             } else { (None, true) }
         };
 
-        prop_offset?;
+        let parent_env_oid = my_data.in_proto.get_obj_id();
+
+        // println!("In objects.rs at JSObjectWrap::get_property_data_value:");
+        // dbg!(my_data.in_proto);
+        // dbg!(prop_offset);
+
+        if prop_offset.is_none() {
+            if let Some(parent_obj) = ctx.heap.get_item(parent_env_oid.unwrap_or(DUD_POOL_ID)) {
+                unsafe { // ! TODO: fix unwrap panic here... is the env parent / prototype real?
+                    return parent_obj.as_ptr().as_mut_unchecked().get_property_data_value(ctx, key_id, ic_id, try_use_getter);
+                }
+            } else if parent_env_oid.is_none() {
+                return None;
+            }
+        }
 
         if ic_dirty {
             unsafe {
@@ -182,10 +293,13 @@ impl JSObjectWrap {
             }
         }
 
-        match &my_data.props.get(prop_offset.unwrap()).unwrap().body {
-            PropBody::Data(prop_v) => Some(*prop_v),
-            _ => None
-        }
+        let prop_ref = my_data.props.get(prop_offset.unwrap()).unwrap();
+
+        Some(if !prop_ref.is_accessor() || try_use_getter {
+            prop_ref.body[0]
+        } else {
+            prop_ref.body[1]
+        })
     }
 
     pub fn get_property_data_mut(&mut self, ctx: &mut JSContext, key_id: usize, ic_id: u16) -> Option<&mut JSValue> {
@@ -200,7 +314,17 @@ impl JSObjectWrap {
             } else { (None, true) }
         };
 
-        prop_offset?;
+        let parent_env_oid = my_data.in_proto.get_obj_id();
+
+        if prop_offset.is_none() {
+            if let Some(parent_obj) = ctx.heap.get_item(parent_env_oid.unwrap_or(DUD_POOL_ID)) {
+                unsafe {
+                    return parent_obj.as_ptr().as_mut_unchecked().get_property_data_mut(ctx, key_id, ic_id);
+                }
+            } else if parent_env_oid.is_none() {
+                return None;
+            }
+        }
 
         if ic_dirty {
             unsafe {
@@ -208,13 +332,10 @@ impl JSObjectWrap {
             }
         }
 
-        match &mut my_data.props.get_mut(prop_offset.unwrap()).unwrap().body {
-            PropBody::Data(prop_v) => Some(prop_v),
-            _ => None
-        }
+        my_data.props.get_mut(prop_offset.unwrap()).unwrap().body.first_mut()
     }
 
-    pub fn set_property_data_mut(&mut self, ctx: &mut JSContext, key_id: usize, ic_id: u16, arg: &JSValue) -> bool {
+    pub fn set_property_data_mut(&mut self, ctx: &mut JSContext, key_id: usize, ic_id: u16, hint: AddPropHint, arg: &JSValue) -> bool {
         let Some(my_data) = self.as_object_mut() else { return false; };
         let my_shape_id = my_data.shape;
 
@@ -235,21 +356,21 @@ impl JSObjectWrap {
         }
 
         if shape_dirty {
-            let maybe_old_shape_child_id = ctx.shapes.fetch_mut(my_shape_id).expect("Expected valid shape reference by ID in objects.rs ~ set_property_data_mut!").resolve_subshape_id(key_id);
+            let maybe_old_shape_child_id = ctx.shapes.fetch_mut(my_shape_id).unwrap().resolve_subshape_id(key_id);
 
             if let Some(existing_child_shape_id) = maybe_old_shape_child_id {
                 my_data.shape = existing_child_shape_id;
             } else {
                 let temp_child_shape = ctx.shapes.fetch_mut(my_shape_id).unwrap().derive_child(key_id, my_data.shape);
-                let temp_child_shape_id = ctx.shapes.store(temp_child_shape).expect("Exhausted shape IDs to i32::MAX in objects.rs ~ set_property_data_mut!");
+                let temp_child_shape_id = ctx.shapes.store(temp_child_shape).unwrap();
                 my_data.shape = temp_child_shape_id;
                 ctx.shapes.fetch_mut(my_shape_id).unwrap().add_transition(key_id, temp_child_shape_id);
             }
 
-            my_data.props.push(Property {
-                body: PropBody::Data(*arg),
-                flags: PropFlag::Writable as u8 | PropFlag::Configurable as u8
-            });
+            match hint {
+                AddPropHint::Data => my_data.props.push(Property::data(arg, PropFlag::Writable as u8 | PropFlag::Configurable as u8)),
+                _ => my_data.props.push(Property::accessor(&JSValue::Null, &JSValue::Null, PropFlag::Writable as u8 | PropFlag::Configurable as u8 | PropFlag::HasGetter as u8 | PropFlag::HasSetter as u8))
+            }
         }
 
         if ic_dirty {
@@ -258,21 +379,24 @@ impl JSObjectWrap {
             }
         }
 
-        match &mut my_data.props.get_mut(prop_offset.unwrap()).unwrap().body {
-            PropBody::Data(prop_v) => {
-                *prop_v = *arg;
-                true
-            },
-            _ => {
-                false
-            }
+        let prop_index = prop_offset.unwrap();
+
+        if hint == AddPropHint::Setter {
+            my_data.props.get_mut(prop_index).unwrap().body[1] = *arg;
+            true
+        } else if hint != AddPropHint::Noop {
+            my_data.props.get_mut(prop_index).unwrap().body[0] = *arg;
+            true
+        } else {
+            false
         }
     }
 }
 
 
 pub type JSObjPtr = Option<Rc<RefCell<JSObjectWrap>>>;
-pub type JSStrPtr = Option<Rc<Cell<String>>>;
+pub type JSStrPtr = Option<Box<String>>;
+pub type JSStrRef<'src_str_lt> = Option<&'src_str_lt str>;
 
 
 #[derive(Default)]
@@ -315,7 +439,7 @@ impl ItemPool<JSObjPtr, JS_OBJECT_COST> {
 
     fn next_id(&mut self) -> Option<i32> {
         let result = if !self.holes.is_empty() {
-            self.holes.pop().expect("Expected freed ID in ItemPool<JSObjPtr>::next_id()")
+            self.holes.pop().unwrap()
         } else {
             self.next_id += 1;
             self.next_id
@@ -407,12 +531,12 @@ impl ItemPool<JSStrPtr, JS_STRING_COST> {
         self.tenure_count = self.next_id + 1;
     }
 
-    pub fn get_item(&self, str_id: i32) -> JSStrPtr {
+    pub fn get_item(&self, str_id: i32) -> JSStrRef<'_> {
         if str_id < 0 || str_id as usize >= self.items.len() {
             return None;
         }
 
-        self.items.get(str_id as usize).unwrap().clone()
+        Some(self.items.get(str_id as usize).unwrap().as_deref().unwrap())
     }
 
     pub fn add_item(&mut self, value: JSStrPtr) -> Option<i32> {

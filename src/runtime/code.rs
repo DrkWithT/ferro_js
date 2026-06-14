@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use crate::runtime::values::JSValue;
-use crate::runtime::objects::{DUD_POOL_ID, JS_OBJECT_COST, JS_STRING_COST, JSObjPtr, JSStrPtr, ItemPool};
+use crate::runtime::objects::{DUD_POOL_ID, ItemPool, JS_OBJECT_COST, JS_STRING_COST, JSObjPtr, JSObjectWrap, JSStrPtr};
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -25,8 +25,6 @@ pub enum Opcode {
     GetVar,
     SetVar,
     MakeObj,
-    GetOwnProp,
-    SetOwnProp,
     GetProp,
     SetProp,
     DelProp,
@@ -62,6 +60,7 @@ pub enum Opcode {
     Jump,
     Call,
     CallCtor,
+    NativeCall,
     Ret,
     // RET_CLOSURE,
 }
@@ -86,8 +85,6 @@ pub const OPCODE_NAMES: &[&str] = &[
     "GetVar",
     "SetVar",
     "MakeObj",
-    "GetOwnProp",
-    "SetOwnProp",
     "GetProp",
     "SetProp",
     "DelProp",
@@ -123,6 +120,7 @@ pub const OPCODE_NAMES: &[&str] = &[
     "Jump",
     "Call",
     "CallCtor",
+    "NativeCall",
     "Ret",
 ];
 
@@ -189,6 +187,14 @@ pub struct InlineCache {
 }
 
 impl InlineCache {
+    pub fn dead() -> Self {
+        Self {
+            entries: [ ICEntry::default(), ICEntry::default() ],
+            misses: 0,
+            state: ICState::Dead
+        }
+    }
+
     fn transition(misses: u32) -> ICState {
         if misses < IC_MISSES_TO_POLY {
             ICState::Mono
@@ -286,7 +292,7 @@ pub struct Program {
     pub name: String,
 }
 
-fn dump_chunk(chunk: &Chunk, id_num: u16) {
+pub fn dump_chunk(chunk: &Chunk, id_num: u16) {
     let Chunk { consts, code , .. } = chunk;
 
     println!("---- Chunk #{id_num} ----\n\n");
@@ -307,9 +313,23 @@ fn dump_chunk(chunk: &Chunk, id_num: u16) {
 }
 
 pub fn dump_bytecode(program: &Program) {
-    let Program { top_level, name, .. } = program;
+    let Program { top_level, name, heap , ..} = program;
 
     println!("---- PROGRAM '{name}' ----\n");
 
     dump_chunk(top_level, 0);
+
+    println!("--- FUNCTIONS ---\n");
+
+    for (oid, func_cell) in heap.items.iter().enumerate() {
+        if let Some(object_cell) = func_cell
+            && let Some(object_data) = unsafe {object_cell.as_ptr().as_ref()} && let JSObjectWrap::Func(f) = object_data {
+            
+            f.show_bytecode(oid as u16);
+        }
+
+        if oid > heap.next_id as usize {
+            break;
+        }
+    }
 }

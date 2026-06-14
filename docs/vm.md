@@ -22,18 +22,21 @@ TEMP STACK, pre-call:
 | ref(foo)  | <-- STACK[CALLEE_BP] uses CALLEE_BP = SP - ARGC
 | ref?this  | <-- STACK[CALLEE_BP - 1] is `thisArg`, defaulted to `globalThis`.
 -----------------
-Begin call:
+```
+##### Begin call:
 1. Load array-like object viewing N temp args to Environment.arguments. A new environment is created if:
    - Case 1: Global scope / code is first entered.
    - Case 2: Constructor calls make a new environment object for `this`.
    - Case 3: If a function captures foreign names or has captured names.
       - Functions are checked at compile time for "foreign" captured names... If there's none, the function is marked "plain", not requiring an environment object itself (but a passed closure argument will!)
       - Bind `this` to global environment IFF the call is regular.
--------...-------
-End call:
+-----------------
+##### End call:
 1. Pop environment IFF there's no function returned, leaving a completion record with the return value. Otherwise, a closure is returned in the record.
-2. The destination of the callee's result gets the unpacked [[value]].
-```
+2. The destination of the callee's result gets the unpacked `[[Value]]`.
+##### Native call:
+1. The native callee _must_ return its result value at `CALLEE_RESULT_SLOT = SP - ARGC - 1` & set SP accordingly.
+2. Trampolined from bytecode to native via `[NATIVE_CALL, RET]`
 
 #### Normal Opcodes
  - PUSH_UNDEF
@@ -43,21 +46,34 @@ End call:
  - PUSH_INF
  - PUSH_NEG_INF
  - PUSH_CONST
- - DUP1        NOTE: a -> a a
- - DUP2        NOTE: a b -> a a b
- - SWAP        NOTE: a b -> b a
- - GET_LOCAL   NOTE: only used if no environment object is needed.
+ - DUP1
+   - NOTE: Stack: `a -> a a^`
+ - DUP2
+   - NOTE: Stack: `a b -> a a b^`
+ - SWAP
+   - NOTE: Stack: `a b -> b a^`
+ - GET_LOCAL
+   - NOTE: only used if no environment object is needed.
  - SET_LOCAL
- - GET_VAR     NOTE: tries getting a var from the callee's environment object, etc.
+ - GET_VAR
+   - NOTE: tries getting a var from the callee's environment object, etc.
  - SET_VAR
  - MAKE_OBJ
  - GET_OWN_PROP
+   - NOTE: If generic arg `0b01` (`INSERT_TYPE` where 1 is data, 2 is getter, 3 is setter, and 0 is erroneous) is on, insert a data property "descriptor" to the object.
+   - Stack: `obj key val^ -> obj`
  - SET_OWN_PROP
- - GET_PROP    NOTE: If generic flag (aka [] access) is on, do so.
- - SET_PROP    NOTE: If generic flag (aka [] access) is on, do so.
- - DEL_PROP    NOTE: ignore indexed items for now!
- - GET_PROTO   NOTE: If hidden flag is on: get `[[Prototype]]`
- - SET_PROTO   NOTE: If hidden flag (`0b0001`) is on: set `[[Prototype]]`. If hidden flag 2 (`0b0010`) is on: use a built-in prototype Value, but use the stack top otherwise.
+   - NOTE: see previous note. 
+ - GET_PROP
+   - NOTE: If generic flag `0b01` (aka [] access) is on, do so. At runtime, if the property is a getter, run that function and give its result. TODO
+ - SET_PROP
+   - NOTE: see previous note.
+ - DEL_PROP
+   - NOTE: ignore indexed items for now!
+ - GET_PROTO
+   - NOTE: If hidden flag is on: get `[[Prototype]]`
+ - SET_PROTO
+   - NOTE: If hidden flag (`0b0001`) is on: set `[[Prototype]]`. If hidden flag 2 (`0b0010`) is on: use a built-in prototype Value, but use the stack top otherwise.
  - TO_BOOLEAN
  - TO_NUMBER
  - INC_LOCAL N    NOTE: increments top stack value at BP + N -- _Prefix gives newValue BUT postfix gives the oldValue!_
@@ -87,7 +103,11 @@ End call:
  - JUMP_ELSE
  - JUMP
  - CALL
+   - NOTE: This Fun `args[n]^ -> Result^`
  - CALL_CTOR
+   - NOTE: _Unimplemented_ since objects and prototypes need implementations!
+ - NATIVE_CALL
+   - NOTE: takes the ID of a native function pointer from its buffer & arg-count.
  - RET
  - RET_CLOSURE ?
 

@@ -1,5 +1,5 @@
 use crate::frontend::{
-    ast::{Operator, SyntaxData, SyntaxNode},
+    ast::{Operator, PropDeclTag, PropDecl, SyntaxData, SyntaxNode},
     token::{Token, TokenKind}
 };
 
@@ -89,6 +89,8 @@ impl<'external_content_lt> Parser<'external_content_lt> {
                 first_tk: tk_pos,
                 end_tk: tk_pos + 1,
             }));
+        } else if current.kind == TokenKind::LeftBrace {
+            return self.parse_object();
         } else if current.kind == TokenKind::LeftBracket {
             return self.parse_array();
         } else if current.kind == TokenKind::LeftParen {
@@ -107,10 +109,93 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         Err(ParseErr { culprit: current.clone(), msg: "Unexpected token for JS primitive literal.", line: current.line })
     }
 
-    #[allow(unused)]
+    fn parse_object_prop(&mut self) -> Result<PropDecl, ParseErr> {
+        let prop_start_tk = self.tokens[self.pos].clone();
+
+        match prop_start_tk.kind {
+            TokenKind::Identifier => {
+                let data_name_tk_id = self.pos; // ? track data-property name before consuming it
+                self.consume();
+
+                let colon_tk = &self.tokens[self.pos];
+                CONSUME_OF!(self.consume(), ParseErr { culprit: colon_tk.clone(), msg: "Expected ':' in data property here.", line: colon_tk.line }, colon_tk.clone(), TokenKind::Colon);
+
+                let data_init_expr = self.parse_or()?;
+
+                Ok(PropDecl {
+                    name_tk_id: data_name_tk_id,
+                    initializer: data_init_expr,
+                    tag: PropDeclTag::Data
+                })
+            },
+            TokenKind::KeywordGet => {
+                self.consume();
+                
+                let getter_name_tk = &self.tokens[self.pos];
+                CONSUME_OF!(self.consume(), ParseErr { culprit: getter_name_tk.clone(), msg: "Expected name in getter property here.", line: getter_name_tk.line }, getter_name_tk.clone(), TokenKind::Identifier);
+                let getter_name_tk_id = self.pos - 1;
+
+                self.pos -= 1; // backtrack to name and reuse parse_lambda() here!
+                let getter_expr = self.parse_lambda()?;
+
+                Ok(PropDecl {
+                    name_tk_id: getter_name_tk_id,
+                    initializer: getter_expr,
+                    tag: PropDeclTag::Getter
+                })
+            },
+            TokenKind::KeywordSet => {
+                self.consume();
+
+                let setter_name_tk = &self.tokens[self.pos];
+                CONSUME_OF!(self.consume(), ParseErr { culprit: setter_name_tk.clone(), msg: "Expected name in setter property here.", line: setter_name_tk.line }, setter_name_tk.clone(), TokenKind::Identifier);
+                let setter_name_tk_id = self.pos - 1;
+
+                self.pos -= 1; // backtrack to name and reuse parse_lambda() here!
+                let setter_expr = self.parse_lambda()?;
+
+                Ok(PropDecl {
+                    name_tk_id: setter_name_tk_id,
+                    initializer: setter_expr,
+                    tag: PropDeclTag::Setter
+                })
+            },
+            _ => Err(ParseErr { culprit: prop_start_tk.clone(), msg: "Unexpected token starting object property!", line: self.line })
+        }
+    }
+
     fn parse_object(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
-        // todo: implement later
-        Err(ParseErr {culprit: Token::eof(0), msg: "Not implemented!", line: 0})
+        let first_tk_pos = self.pos;
+        self.consume(); // ? skip '{'
+
+        let mut props = Vec::<PropDecl>::default();
+
+        if self.tokens.get(self.pos).unwrap().kind != TokenKind::RightBrace {
+            let first_prop_decl = self.parse_object_prop()?;
+
+            props.push(first_prop_decl);
+        }
+
+        while !self.at_eof() {
+            if self.tokens.get(self.pos).unwrap().kind != TokenKind::Comma {
+                break;
+            }
+
+            self.consume();
+
+            let next_prop_decl = self.parse_object_prop()?;
+
+            props.push(next_prop_decl);
+        }
+
+        let maybe_rbrace_tk = self.tokens.get(self.pos).unwrap();
+        CONSUME_OF!(self.consume(), ParseErr { culprit: maybe_rbrace_tk.clone(), msg: "Unexpected token ending object literal, expected a '}'.", line: maybe_rbrace_tk.line }, maybe_rbrace_tk.clone(), TokenKind::RightBrace);
+
+        Ok(Box::new(SyntaxNode {
+            data: SyntaxData::ObjectExpr { props },
+            first_tk: first_tk_pos,
+            end_tk: self.pos
+        }))
     }
 
     fn parse_array(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {        
@@ -285,41 +370,9 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         }))
     }
 
-    fn parse_prefix_unary(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
-        let first_tk_pos = self.pos;
-
-        let prefix_unary_op = match self.tokens[self.pos].kind {
-            TokenKind::OperatorBang => Operator::NegBool,
-            TokenKind::OperatorPlus => Operator::ForceNum,
-            TokenKind::OperatorMinus => Operator::NegNum,
-            TokenKind::OperatorPlusPlus => Operator::Inc,
-            TokenKind::OperatorMinusMinus => Operator::Dec,
-            TokenKind::OperatorBitFlip => Operator::BitFlip,
-            TokenKind::KeywordNew => Operator::New,
-            TokenKind::KeywordDelete => Operator::Delete,
-            TokenKind::KeywordTypeOf => Operator::TypeOf,
-            TokenKind::KeywordVoid => Operator::Void,
-            _ => Operator::Noop,
-        };
-
-        if prefix_unary_op != Operator::Noop {
-            self.consume();
-        } else {
-            return self.parse_call();
-        }
-
-        let inner = self.parse_call()?;
-
-        Ok(Box::new(SyntaxNode {
-            data: SyntaxData::Unary { inner, op: prefix_unary_op, prefix: true },
-            first_tk: first_tk_pos,
-            end_tk: self.pos
-        }))
-    }
-
     fn parse_postfix_unary(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
         let first_tk_pos = self.pos;
-        let inner = self.parse_prefix_unary()?;
+        let inner = self.parse_call()?;
 
         let postfix_unary_op = match self.tokens[self.pos].kind {
             TokenKind::OperatorPlusPlus => {
@@ -344,8 +397,40 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         }))
     }
 
+    fn parse_prefix_unary(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
+        let first_tk_pos = self.pos;
+
+        let prefix_unary_op = match self.tokens[self.pos].kind {
+            TokenKind::OperatorBang => Operator::NegBool,
+            TokenKind::OperatorPlus => Operator::ForceNum,
+            TokenKind::OperatorMinus => Operator::NegNum,
+            TokenKind::OperatorPlusPlus => Operator::Inc,
+            TokenKind::OperatorMinusMinus => Operator::Dec,
+            TokenKind::OperatorBitFlip => Operator::BitFlip,
+            TokenKind::KeywordNew => Operator::New,
+            TokenKind::KeywordDelete => Operator::Delete,
+            TokenKind::KeywordTypeOf => Operator::TypeOf,
+            TokenKind::KeywordVoid => Operator::Void,
+            _ => Operator::Noop,
+        };
+
+        if prefix_unary_op != Operator::Noop {
+            self.consume();
+        } else {
+            return self.parse_postfix_unary();
+        }
+
+        let inner = self.parse_postfix_unary()?;
+
+        Ok(Box::new(SyntaxNode {
+            data: SyntaxData::Unary { inner, op: prefix_unary_op, prefix: true },
+            first_tk: first_tk_pos,
+            end_tk: self.pos
+        }))
+    }
+
     fn parse_factor(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
-        let mut lhs = self.parse_postfix_unary()?;
+        let mut lhs = self.parse_prefix_unary()?;
 
         while !self.at_eof() {
             let factor_op = match self.tokens[self.pos].kind {
@@ -362,7 +447,7 @@ impl<'external_content_lt> Parser<'external_content_lt> {
 
             let pre_rhs_pos = self.pos;
             lhs = Box::new(SyntaxNode {
-                data: SyntaxData::Binary { l: lhs, r: self.parse_postfix_unary()?, op: factor_op },
+                data: SyntaxData::Binary { l: lhs, r: self.parse_prefix_unary()?, op: factor_op },
                 first_tk: pre_rhs_pos,
                 end_tk: self.pos,
             });
@@ -432,6 +517,8 @@ impl<'external_content_lt> Parser<'external_content_lt> {
             let equality_op = match self.tokens[self.pos].kind {
                 TokenKind::OperatorStrictEquals => Operator::StrictEqual,
                 TokenKind::OperatorStrictUnequals => Operator::StrictUnequal,
+                TokenKind::OperatorLooseEqual => Operator::LooseEqual,
+                TokenKind::OperatorLooseUnequal => Operator::LooseUnequal,
                 _ => Operator::Noop,
             };
 
@@ -640,7 +727,7 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         let cond = self.parse_or()?;
 
         let rparen_tk = &self.tokens[self.pos];
-        CONSUME_OF!(self.consume(), ParseErr { culprit: rparen_tk.clone(), msg: "Expected '(' closing an if-condition here.", line: rparen_tk.line }, rparen_tk.clone(), TokenKind::RightParen);
+        CONSUME_OF!(self.consume(), ParseErr { culprit: rparen_tk.clone(), msg: "Expected ')' closing an if-condition here.", line: rparen_tk.line }, rparen_tk.clone(), TokenKind::RightParen);
 
         let tbody = self.parse_stmt();
         let fbody: Result<Box<SyntaxNode>, ParseErr> = if self.tokens[self.pos].kind == TokenKind::KeywordElse {

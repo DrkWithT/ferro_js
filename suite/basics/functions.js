@@ -1,21 +1,19 @@
-var ok = 0;
-
 function foo(x) {
     return x + 1;
 }
 
-var bar = function (x) {
-    return x + 1;
-};
+// function bar(a, b) {
+//     return a + b;
+// }
 
-var test3 = (function (x) { return x + 1; })(1);
+// var ok = 0;
 
-if (foo(1) === bar(1)) {
-    ok++;
-}
+// if (foo(1) === 2) {
+//     ok++;
+// }
 
-if (test3 === 2) {
-    ok++;
-}
+// if (this.bar(1, 1) === 2) {
+//     ok++;
+// }
 
-return ok === 2;
+return foo(1);

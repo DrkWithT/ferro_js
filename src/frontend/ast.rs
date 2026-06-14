@@ -38,7 +38,7 @@ pub enum Operator {
 }
 
 #[repr(u8)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SyntaxId {
     Nil,
     Literal,
@@ -63,13 +63,28 @@ pub enum SyntaxId {
     EmptyStmt,
 }
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PropDeclTag {
+    Data,
+    Getter,
+    Setter,
+}
+
+#[derive(Debug)]
+pub struct PropDecl {
+    pub name_tk_id: usize,
+    pub initializer: Box<SyntaxNode>,
+    pub tag: PropDeclTag
+}
+
 #[derive(Debug)]
 pub enum SyntaxData {
     /// Stores index into token buffer, saving memory
     Nil,
     Literal(usize),
     ObjectExpr {
-        props: Vec<(usize, Box<SyntaxNode>)>,
+        props: Vec<PropDecl>,
     },
     ArrayExpr {
         items: Vec<Box<SyntaxNode>>,
@@ -145,9 +160,9 @@ impl SyntaxData {
         match self {
             Self::Nil => SyntaxId::Nil,
             Self::Literal(_) => SyntaxId::Literal,
-            Self::ObjectExpr { .. } => SyntaxId::ObjectExpr,
+            Self::ObjectExpr {..} => SyntaxId::ObjectExpr,
             Self::ArrayExpr {..} => SyntaxId::ArrayExpr,
-            Self::Lambda { .. } => SyntaxId::Lambda,
+            Self::Lambda {..} => SyntaxId::Lambda,
             Self::Lhs {..} => SyntaxId::Lhs,
             Self::Unary {..} => SyntaxId::Unary,
             Self::Binary {..} => SyntaxId::Binary,
@@ -159,8 +174,8 @@ impl SyntaxData {
             Self::Ifs {..} => SyntaxId::Ifs,
             Self::While {..} => SyntaxId::While,
             Self::CLikeFor {..} => SyntaxId::CLikeFor,
-            Self::Break {  } => SyntaxId::Break,
-            Self::Continue {  } => SyntaxId::Continue,
+            Self::Break {} => SyntaxId::Break,
+            Self::Continue {} => SyntaxId::Continue,
             Self::Return {..} => SyntaxId::Return,
             Self::ExprStmt {..} => SyntaxId::ExprStmt,
             Self::EmptyStmt {} => SyntaxId::EmptyStmt,
