@@ -1,11 +1,12 @@
 use core::num::ParseIntError;
 use std::cell::RefCell;
 use std::fmt::Display;
-use std::rc::Rc;
 
 use crate::runtime::values::JSValue;
-use crate::runtime::code::{Instruction, InlineCache, Chunk, Program};
-use crate::runtime::objects::{DUD_POOL_ID, DUD_SHAPE_ID, ExoticObject, ItemPool, JS_OBJECT_COST, JS_STRING_COST, JSObjPtr, JSObjectWrap, JSStrPtr, Shape, ShapePool};
+use crate::runtime::shape::{DUD_SHAPE_ID, Shape};
+use crate::runtime::property::{AddPropHint, PropFlag, Property};
+use crate::runtime::code::{Instruction, InlineCache, JSFuncFlag, Chunk, Program};
+use crate::runtime::objects::{DUD_POOL_ID, ExoticObject, ItemPool, JS_OBJECT_COST, JS_STRING_COST, JSObjPtr, JSOpaque, JSStrPtr, ShapePool};
 
 /// ### ABOUT
 /// Indicates status of VM execution. See each enum member for a quick description.
@@ -44,8 +45,8 @@ pub struct CallFrame {
     ///  - 1: Holds a new object environment upon ctor calls.
     ///  - 2: Holds a custom `this` Value from `Function.call()`.
     ///  - 3: If `use strict` applies, do not coerce `this` to globalThis. Otherwise, do so.
-    pub env_v: JSValue, // ! FIXME: use JSValue instead to simplify property accesses later with object-id values + key-value...
-    pub callee_p: *mut JSObjectWrap, // ! FIXME: use JSValue
+    pub env_v: JSValue,
+    pub callee_p: JSValue,
     pub caller_rip: *const Instruction,
     pub caller_icp: *mut InlineCache,
     pub caller_cvp: *const JSValue,
@@ -57,7 +58,7 @@ impl Default for CallFrame {
     fn default() -> Self {
         Self {
             env_v: JSValue::Undefined,
-            callee_p: std::ptr::null_mut(),
+            callee_p: JSValue::Undefined,
             caller_rip: std::ptr::null(),
             caller_icp: std::ptr::null_mut(),
             caller_cvp: std::ptr::null(),
@@ -66,6 +67,9 @@ impl Default for CallFrame {
         }
     }
 }
+
+/// Type alias for Rust-native functions to call from FerroJS. These natives are "trampolined" into from a wrapping `JSFunction`: That chunk would have `PushUndef, NativeCall, Ret` which would defer to natives without a VM vs. native check.
+pub type NativeFn = unsafe fn(*mut JSContext, u16) -> bool;
 
 /// ## ABOUT
 /// Stores all state of the interpreter, primarily for the VM's execution and memory management.
@@ -81,7 +85,7 @@ pub struct JSContext {
     pub frames: Vec<CallFrame>,
     /// Holds pre-allocated buffer of JSValues.
     pub stack: Vec<JSValue>,
-    pub top_code: Chunk,
+    pub top_code: Vec<Box<Chunk>>,
     pub ip: *const Instruction,
     pub icp: *mut InlineCache,
     pub cvp: *const JSValue,
@@ -97,23 +101,25 @@ impl JSContext {
     /// ### ABOUT
     /// Constructs a new JSContext for the interpreter's VM.
     pub fn new(shape_population: usize, stack_sizing: usize, calls_max: u16, mut program: Program) -> Self {
-        let start_ip = program.top_level.code.as_ptr();
-        let start_icp = program.top_level.icaches.as_mut_ptr();
-        let start_cvp = program.top_level.consts.as_ptr();
+        // ! NOTE: the last Chunk pushed to program.chunks is the top-level code. See emitter.rs in its last method.
+        let start_ip = program.chunks.last().unwrap().code.as_ptr();
+        let start_icp = program.chunks.last_mut().unwrap().icaches.as_mut_ptr();
+        let start_cvp = program.chunks.last().unwrap().consts.as_ptr();
 
-        let first_env_id = program.heap.add_item(Some(Rc::new(RefCell::new(JSObjectWrap::Exotic(
+        let first_env_id = program.heap.add_item(Some(RefCell::new(
             ExoticObject {
                 props: vec![],
                 items: vec![],
                 in_proto: JSValue::Undefined,
                 out_proto: JSValue::Undefined,
+                opaque: JSOpaque::default(),
                 shape: DUD_SHAPE_ID
             }
-        ))))).unwrap();
+        ))).unwrap();
 
         let mut first_frame = CallFrame {
             env_v: JSValue::ObjectId(first_env_id),
-            callee_p: std::ptr::null_mut(),
+            callee_p: JSValue::Undefined,
             caller_rip: std::ptr::null(),
             caller_icp: std::ptr::null_mut(),
             caller_cvp: std::ptr::null(),
@@ -150,7 +156,7 @@ impl JSContext {
 
                 temp_stack
             },
-            top_code: program.top_level,
+            top_code: program.chunks,
             ip: start_ip,
             icp: start_icp,
             cvp: start_cvp,
@@ -169,15 +175,16 @@ impl JSContext {
     pub fn create_child_env(&mut self) -> JSValue {
         let current_env_v = self.frames.last().expect("Expected available environment at ctx.rs ~ create_child_env").env_v;
 
-        if let Some(new_env_oid) = self.heap.add_item(Some(Rc::new(RefCell::new(JSObjectWrap::Exotic(
+        if let Some(new_env_oid) = self.heap.add_item(Some(RefCell::new(
             ExoticObject {
                 props: vec![],
                 items: vec![],
                 in_proto: current_env_v,
                 out_proto: JSValue::Undefined,
+                opaque: JSOpaque::default(),
                 shape: 0,
             }
-        ))))) {
+        ))) {
             JSValue::ObjectId(new_env_oid)
         } else {
             self.status = EvalStatus::BadAlloc;
@@ -186,15 +193,55 @@ impl JSContext {
     }
 
     pub fn create_blank_obj(&mut self) -> JSValue {
-        let Some(prepared_oid) = self.heap.add_item(Some(Rc::new(RefCell::new(
-            JSObjectWrap::Exotic(
-                ExoticObject::default()
-            )
-        )))) else {
+        let Some(prepared_oid) = self.heap.add_item(Some(RefCell::new(
+            ExoticObject::default()
+        ))) else {
             return JSValue::Undefined;
         };
 
         JSValue::ObjectId(prepared_oid)
+    }
+
+    pub fn try_invoke_obj(&mut self, v: &JSValue, argc: u16) -> EvalStatus {
+        let Some(func_oid) = v.get_obj_id() else {
+            return EvalStatus::BadOp;
+        };
+
+        let env_v = if 0 != (self.heap.get_item(func_oid).expect("Expected func-reference for object ID at ctx.rs ~ try_invoke_obj").opaque.flags & JSFuncFlag::NeedsEnv as u8) {
+            self.create_child_env()
+        } else {
+            self.get_curr_env()
+        };
+
+        unsafe {
+            let caller_rip = self.ip.add(1);
+            let caller_icp = self.icp;
+            let caller_cvp = self.cvp;
+            let caller_bp = self.bp;
+            let callee_bp = self.sp - argc as i32; // callee ref
+
+            // print!("In funcs.rs, JSFunction::call:\nenv_js_value = ");
+            // dbg!(env_jsvalue);
+
+            self.frames.push(CallFrame {
+                env_v,
+                callee_p: self.frames.last().unwrap().callee_p,
+                caller_rip,
+                caller_icp,
+                caller_cvp,
+                caller_bp,
+                callee_bp
+            });
+
+            self.bp = callee_bp;
+            self.ip = self.heap.get_item(func_oid).unwrap().opaque.as_bytecode().as_ref_unchecked().code.as_ptr();
+            self.cvp = self.heap.get_item(func_oid).unwrap().opaque.as_bytecode().as_ref_unchecked().consts.as_ptr();
+            self.icp = self.heap.get_item(func_oid).unwrap().opaque.as_bytecode().as_mut_unchecked().icaches.as_mut_ptr();
+        }
+
+        self.cd += 1;
+
+        EvalStatus::Pending
     }
 
     /// ### ABOUT
@@ -288,6 +335,156 @@ impl JSContext {
                 },
                 JSValue::ObjectId(lhs_oid) => *lhs_oid == rhs.get_obj_id().unwrap_or(DUD_POOL_ID)
             }
+        }
+    }
+
+    pub fn check_property_is_accessor(&self, oid: i32, key_id: usize) -> bool {
+        let my_shape_id = self.heap.get_item(oid).unwrap().shape;
+
+        let prop_offset = if let Some(slow_prop_ref) = self.shapes.fetch(my_shape_id) {
+            slow_prop_ref.resolve_offset(key_id)
+        } else { None };
+
+        let parent_env_oid = self.heap.get_item(oid).unwrap().in_proto.get_obj_id();
+
+        if prop_offset.is_none() {
+            if parent_env_oid.is_none() {
+                return false;
+            }
+
+            return self.check_property_is_accessor(parent_env_oid.unwrap(), key_id);
+        }
+
+        self.heap.get_item(oid).unwrap().props.get(prop_offset.unwrap()).unwrap().is_accessor()
+    }
+
+    pub fn get_property_data_value(&mut self, oid: i32, key_id: usize, ic_id: u16, try_use_getter: bool) -> Option<JSValue> {
+        let my_shape_id = self.heap.get_item(oid).unwrap().shape;
+
+        // dbg!(my_shape_id);
+
+        let (prop_offset, ic_dirty) = unsafe {
+            if let Some (ic_slot) = self.icp.add(ic_id as usize).as_mut().unwrap().find(my_shape_id, key_id) {
+                // println!("Debug: try IC...");
+                // dbg!(my_shape_id, key_id);
+                (Some(ic_slot), false)
+            } else if let Some(slow_prop_ref) = self.shapes.fetch(my_shape_id) {
+                // println!("Debug: try Shape...");
+                // dbg!(my_shape_id, key_id);
+                (slow_prop_ref.resolve_offset(key_id), true)
+            } else { (None, true) }
+        };
+
+        let parent_env_oid = self.heap.get_item(oid).unwrap().in_proto.get_obj_id();
+
+        // println!("In objects.rs at JSObjectWrap::get_property_data_value:");
+        // dbg!(my_data.in_proto);
+        // dbg!(prop_offset);
+
+        if prop_offset.is_none() {
+            parent_env_oid?;
+
+            let parent_oid = parent_env_oid.unwrap();
+
+            return self.get_property_data_value(parent_oid, key_id, ic_id, try_use_getter);
+        }
+
+        if ic_dirty {
+            unsafe {
+                self.icp.add(ic_id as usize).as_mut_unchecked().update(my_shape_id, key_id, prop_offset.unwrap());
+            }
+        }
+
+        let prop_ref = self.heap.get_item(oid).unwrap().props.get(prop_offset.unwrap()).unwrap();
+
+        Some(if !prop_ref.is_accessor() || try_use_getter {
+            prop_ref.body[0]
+        } else {
+            prop_ref.body[1]
+        })
+    }
+
+    pub fn get_property_data_mut(&mut self, oid: i32, key_id: usize, ic_id: u16) -> Option<&mut JSValue> {
+        let my_shape_id = self.heap.get_item(oid).unwrap().shape;
+
+        let (prop_offset, ic_dirty) = unsafe {
+            if let Some (ic_slot) = self.icp.add(ic_id as usize).as_mut().unwrap().find(my_shape_id, key_id) {
+                (Some(ic_slot), false)
+            } else if let Some(slow_prop_ref) = self.shapes.fetch(my_shape_id) {
+                (slow_prop_ref.resolve_offset(key_id), true)
+            } else { (None, true) }
+        };
+
+        let parent_env_oid = self.heap.get_item(oid).unwrap().in_proto.get_obj_id();
+
+        if prop_offset.is_none() {
+            parent_env_oid?;
+
+            return self.get_property_data_mut(parent_env_oid.unwrap(), key_id, ic_id);
+        }
+
+        if ic_dirty {
+            unsafe {
+                self.icp.add(ic_id as usize).as_mut_unchecked().update(my_shape_id, key_id, prop_offset.unwrap());
+            }
+        }
+
+        self.heap.get_item_mut(oid).unwrap().props.get_mut(prop_offset.unwrap()).unwrap().body.first_mut()
+    }
+
+    pub fn set_property_data_mut(&mut self, oid: i32, key_id: usize, ic_id: u16, hint: AddPropHint, arg: &JSValue) -> bool {
+        let my_shape_id = self.heap.get_item(oid).unwrap().shape;
+
+        let (prop_offset, ic_dirty, shape_dirty) = unsafe {
+            if let Some (ic_slot) = self.icp.add(ic_id as usize).as_mut().unwrap().find(my_shape_id, key_id) {
+                (Some(ic_slot), false, false)
+            } else if let Some(slow_prop_ref) = self.shapes.fetch(my_shape_id) {
+                if let Some(present_prop_offset) = slow_prop_ref.resolve_offset(key_id) {
+                    (Some(present_prop_offset), true, false)
+                } else {
+                    (Some(self.heap.get_item(oid).unwrap().props.len()), true, true)
+                }
+            } else { (None, true, true) }
+        };
+
+        if prop_offset.is_none() {
+            return false;
+        }
+
+        if shape_dirty {
+            let maybe_old_shape_child_id = self.shapes.fetch_mut(my_shape_id).unwrap().resolve_subshape_id(key_id);
+
+            if let Some(existing_child_shape_id) = maybe_old_shape_child_id {
+                self.heap.get_item_mut(oid).unwrap().shape = existing_child_shape_id;
+            } else {
+                let temp_child_shape = self.shapes.fetch_mut(my_shape_id).unwrap().derive_child(key_id, self.heap.get_item(oid).unwrap().shape);
+                let temp_child_shape_id = self.shapes.store(temp_child_shape).unwrap();
+                self.heap.get_item_mut(oid).unwrap().shape = temp_child_shape_id;
+                self.shapes.fetch_mut(my_shape_id).unwrap().add_transition(key_id, temp_child_shape_id);
+            }
+
+            match hint {
+                AddPropHint::Data => self.heap.get_item_mut(oid).unwrap().props.push(Property::data(arg, PropFlag::Writable as u8 | PropFlag::Configurable as u8)),
+                _ => self.heap.get_item_mut(oid).unwrap().props.push(Property::accessor(&JSValue::Null, &JSValue::Null, PropFlag::Writable as u8 | PropFlag::Configurable as u8 | PropFlag::HasGetter as u8 | PropFlag::HasSetter as u8))
+            }
+        }
+
+        if ic_dirty {
+            unsafe {
+                self.icp.add(ic_id as usize).as_mut_unchecked().update(my_shape_id, key_id, prop_offset.unwrap());
+            }
+        }
+
+        let prop_index = prop_offset.unwrap();
+
+        if hint == AddPropHint::Setter {
+            self.heap.get_item_mut(oid).unwrap().props.get_mut(prop_index).unwrap().body[1] = *arg;
+            true
+        } else if hint != AddPropHint::Noop {
+            self.heap.get_item_mut(oid).unwrap().props.get_mut(prop_index).unwrap().body[0] = *arg;
+            true
+        } else {
+            false
         }
     }
 }

@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::runtime::objects::{JS_OBJECT_COST, JSObjPtr, ItemPool};
+use crate::runtime::objects::{JS_OBJECT_COST, JSInternalTag, JSObjPtr, ItemPool};
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -71,7 +71,7 @@ impl JSValue {
 
     pub fn is_exotic_obj_ref(&self, heap: &ItemPool<JSObjPtr, JS_OBJECT_COST>) -> bool {
         if let Some(oid) = self.get_obj_id() && let Some(obj_ref) = heap.get_item(oid) {
-            return obj_ref.borrow().as_object().is_some();
+            return obj_ref.opaque.has_discriminant(JSInternalTag::Empty);
         }
 
         false
@@ -79,7 +79,7 @@ impl JSValue {
 
     pub fn is_func_ref(&self, heap: &ItemPool<JSObjPtr, JS_OBJECT_COST>) -> bool {
         if let Some(oid) = self.get_obj_id() && let Some(obj_ref) = heap.get_item(oid) {
-            return obj_ref.borrow().as_func().is_some();
+            return obj_ref.opaque.has_discriminant(JSInternalTag::Code);
         }
 
         false

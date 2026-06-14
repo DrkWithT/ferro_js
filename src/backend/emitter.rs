@@ -1,5 +1,4 @@
 use std::collections::{HashMap};
-use std::rc::Rc;
 use std::cell::{RefCell};
 
 use crate::frontend::{
@@ -7,11 +6,9 @@ use crate::frontend::{
     ast::{Operator, SyntaxId, SyntaxData, SyntaxNode, PropDecl, PropDeclTag, AST},
 };
 
-use crate::runtime::code::InlineCache;
-use crate::runtime::funcs::JSFunction;
-use crate::runtime::objects::{ExoticObject, JSObjectWrap};
+use crate::runtime::objects::{ExoticObject, JSOpaque};
 use crate::runtime::{
-    code::{Opcode, Instruction, Chunk, Program},
+    code::{InlineCache, JSFuncFlag, Opcode, Instruction, Chunk, Program},
     values::{JSValue},
     objects::{JSObjPtr, JSStrPtr, JS_OBJECT_COST, JS_STRING_COST, ItemPool, /*ExoticObject*/},
     // funcs::{FuncBody, JSFunction},
@@ -128,11 +125,13 @@ impl EmitterHints {
 pub struct Emitter {
     pub heap: ItemPool<JSObjPtr, JS_OBJECT_COST>,
     pub spool: ItemPool<JSStrPtr, JS_STRING_COST>,
+    pub chunk_buf: Vec<Box<Chunk>>,
     pub chunks: Vec<Chunk>,
     pub scopes: Vec<SymbolScope>,
     pub cached_info: Option<SymbolInfo>,
     pub local_reserve_n: i32,
     pub line: u16,
+    pub chunk_n: u16,
 }
 
 impl Emitter {
@@ -140,11 +139,13 @@ impl Emitter {
         Self {
             heap: ItemPool::<JSObjPtr, JS_OBJECT_COST>::new(object_population),
             spool: ItemPool::<JSStrPtr, JS_STRING_COST>::new(str_population),
+            chunk_buf: vec![],
             chunks: vec![Chunk::default()],
             scopes: vec![SymbolScope::default()],
             cached_info: None,
             local_reserve_n: 0,
             line: 1,
+            chunk_n: 0
         }
     }
 
@@ -630,7 +631,12 @@ impl Emitter {
 
         // ! Delete the mock parameter entries to not confuse the emission's name resolution.
         self.scopes.last_mut().unwrap().symbols.clear();
-        self.chunks.push(Chunk::default());
+
+        let started_chunk = Chunk {
+            arity: params.len() as u16,
+            ..Default::default()
+        };
+        self.chunks.push(started_chunk);
 
         for (param_pos, param_tk_pos) in params.iter().enumerate() {
             let param_name = ast.tokens[*param_tk_pos].to_string(src_text);
@@ -660,19 +666,16 @@ impl Emitter {
             return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
-        let func_code = self.chunks.pop().unwrap();
+        let code_ptr = std::ptr::from_mut(self.chunk_buf.push_mut(
+            Box::new(self.chunks.pop().unwrap())
+        ).as_mut());
 
-        let Some(func_oid) = self.heap.add_item(Some(Rc::new(RefCell::new(
-            JSObjectWrap::Func(
-                JSFunction::bcode(
-                    ExoticObject::default(),
-                    func_code,
-                    params.len() as u16,
-                    !func_is_simple,
-                    false
-                )
-            )
-        )))) else { return hints.without_flag(EmitterFlag::IsVisitOK); };
+        let Some(func_oid) = self.heap.add_item(Some(RefCell::new(
+            ExoticObject::with_opaque(JSOpaque::bytecode(
+                code_ptr,
+                if !func_is_simple {JSFuncFlag::NeedsEnv as u8} else {0},
+            ))
+        ))) else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
         self.scopes.pop();
 
@@ -1062,9 +1065,13 @@ impl Emitter {
         // ? Evaluate thisArg for callees. Cases below are explained.
         let callee_emit_hints = if callee.data.get_emitter_id() == SyntaxId::Lhs {
             hints.with_flag(EmitterFlag::HasThisArg)
-        } else {
+        } else if !hints.get_flag(EmitterFlag::IsFuncSimple) {
             self.emit_nonary_inst(Opcode::PushThisRef, 0); // Fill in this = [[env]].
             self.emit_nonary_inst(Opcode::Dup1, 0);
+
+            hints
+        } else {
+            self.emit_nonary_inst(Opcode::PushUndef, 0);
 
             hints
         };
@@ -1184,19 +1191,18 @@ impl Emitter {
             return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
-        let func_code = self.chunks.pop().unwrap();
+        let code_ptr = std::ptr::from_mut(self.chunk_buf.push_mut(
+            Box::new(self.chunks.pop().unwrap())
+        ).as_mut());
 
-        let Some(func_oid) = self.heap.add_item(Some(Rc::new(RefCell::new(
-            JSObjectWrap::Func(
-                JSFunction::bcode(
-                    ExoticObject::default(),
-                    func_code,
-                    params.len() as u16,
-                    !func_is_simple,
-                    false
+        let Some(func_oid) = self.heap.add_item(Some(RefCell::new(
+            ExoticObject::with_opaque(
+                JSOpaque::bytecode(
+                    code_ptr,
+                    if !func_is_simple {JSFuncFlag::NeedsEnv as u8} else {0},
                 )
             )
-        )))) else { return hints.without_flag(EmitterFlag::IsVisitOK); };
+        ))) else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
         self.scopes.pop();
 
@@ -1535,10 +1541,14 @@ impl Emitter {
 
         self.emit_nonary_inst(Opcode::Ret, 0);
 
+        self.chunk_buf.push(Box::new(
+            self.chunks.pop().unwrap()
+        )); // ! Finish top-level code last.
+
         Some(Program {
             heap: std::mem::take(&mut self.heap),
             spool: std::mem::take(&mut self.spool),
-            top_level: std::mem::take(self.chunks.first_mut().expect("Expected top-level bytecode chunk present at Emitter::emit_code ~ line 970.")),
+            chunks: std::mem::take(&mut self.chunk_buf),
             name: name.clone(),
         })
     }

@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use crate::runtime::values::JSValue;
-use crate::runtime::objects::{DUD_POOL_ID, ItemPool, JS_OBJECT_COST, JS_STRING_COST, JSObjPtr, JSObjectWrap, JSStrPtr};
+use crate::runtime::objects::{DUD_POOL_ID, ItemPool, JS_OBJECT_COST, JS_STRING_COST, JSObjPtr, JSStrPtr};
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -274,11 +274,26 @@ impl InlineCache {
     }
 }
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum JSFuncFlag {
+    NeedsEnv = (1 << 0),
+    IsNative = (1 << 1),
+    /// **NOTE:** Unused for now: indicates whether the special `=>` function behavior applies:
+    /// - 1: No captures.
+    /// - 2: `this` is `undefined`.
+    IsArrow = (1 << 2),
+    IsStrict = (1 << 3),
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct Chunk {
     pub icaches: Vec<InlineCache>,
     pub consts: Vec<JSValue>,
     pub code: Vec<Instruction>,
+    pub arity: u16,
+    /// See `JSFuncFlag` at runtime/code.rs for possible flags.
+    pub flags: u8,
 }
 
 pub struct Program {
@@ -286,8 +301,8 @@ pub struct Program {
     pub heap: ItemPool<JSObjPtr, JS_OBJECT_COST>,
     /// Interned string pool
     pub spool: ItemPool<JSStrPtr, JS_STRING_COST>,
-    /// Bytecode for top-level JS code
-    pub top_level: Chunk,
+    /// Bytecode of JS code Boxes. This is for pointer stability so each exotic object can have a mutable-view ptr to the same chunk address.
+    pub chunks: Vec<Box<Chunk>>,
     /// Saved script file-path
     pub name: String,
 }
@@ -295,7 +310,7 @@ pub struct Program {
 pub fn dump_chunk(chunk: &Chunk, id_num: u16) {
     let Chunk { consts, code , .. } = chunk;
 
-    println!("---- Chunk #{id_num} ----\n\n");
+    println!("---- Chunk of oid-{id_num} ----\n\n");
 
     println!("--- CONSTS ---\n");
 
@@ -313,19 +328,27 @@ pub fn dump_chunk(chunk: &Chunk, id_num: u16) {
 }
 
 pub fn dump_bytecode(program: &Program) {
-    let Program { top_level, name, heap , ..} = program;
+    let Program {heap , chunks, name, ..} = program;
 
     println!("---- PROGRAM '{name}' ----\n");
 
-    dump_chunk(top_level, 0);
+    dump_chunk(chunks.first().unwrap(), 0);
 
     println!("--- FUNCTIONS ---\n");
 
     for (oid, func_cell) in heap.items.iter().enumerate() {
-        if let Some(object_cell) = func_cell
-            && let Some(object_data) = unsafe {object_cell.as_ptr().as_ref()} && let JSObjectWrap::Func(f) = object_data {
-            
-            f.show_bytecode(oid as u16);
+        if let Some(object_cell) = func_cell {
+            unsafe {
+                let chunk_ptr = object_cell.borrow().opaque.as_bytecode();
+
+                if !chunk_ptr.is_null() {
+                    let arity = chunk_ptr.as_ref_unchecked().arity;
+                    let flags = chunk_ptr.as_ref_unchecked().flags;
+
+                    println!("\x1b[1;33mFunction\x1b[0m(arity = \x1b[1;31m{arity}\x1b[0m, flags = \x1b[1;31m{flags}\x1b[0m)\n");
+                    dump_chunk(chunk_ptr.as_ref_unchecked(), oid as u16);
+                }
+            }
         }
 
         if oid > heap.next_id as usize {

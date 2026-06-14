@@ -3,11 +3,9 @@
 #### v0.1.0
  - Support more JS operators, including prefix, postfix, bitwise, and logical ops.
  - Support simple functions.
-    - Support emitting simple function decls (NOTE: _Fail on returning closures, etc. until full object system is done!_)
- - Support simple objects with property semantics: data vs. accessor, writable + configurable + enumerable.
-    - Test & Refactor:
-      - Refactor properties to just be 3 JSValues & flags: `[[Value]], [[Get]], [[Set]], [[Flags]]`
+ - Support simple objects with property semantics: data vs. accessor.
  - Implement closures.
+   - Add RET_CLOSURE support.
  - Support assignment op results, conditional ternary op.
  - Add `typeof`, `delete`
    - TypeOf results:
@@ -21,7 +19,9 @@
       - functions: `"function"`
    - Delete result:
       - The operation succeeds with `true` when property is non-accessor AND configurable.
+      - NOTE: writable + configurable + enumerable are 3 important flags per property. 
  - Support strings.
+ - Refactor codebase into modular, Dep. Injected driver.
 
 #### v0.2.0
  - Support intrinsics for future:
