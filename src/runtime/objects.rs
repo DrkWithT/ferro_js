@@ -14,7 +14,7 @@ pub struct Shape {
     /// Maps pre-calculated string hashes to property indices.
     pub entries: HashMap<usize, usize>,
     /// Maps pre-calculated string hashes of new properties to child Shapes.
-    pub links: Vec<(usize, i32)>,
+    pub links: HashMap<usize, i32>,
     pub parent: i32,
     /// NOTE: **MUST** be updated after this `Shape` is cloned from its parent.
     pub id: i32,
@@ -29,7 +29,7 @@ impl Default for Shape {
     fn default() -> Self {
         Self {
             entries: HashMap::default(),
-            links: vec![],
+            links: HashMap::default(),
             parent: DUD_SHAPE_ID,
             id: 0
         }
@@ -42,30 +42,22 @@ impl Shape {
     }
 
     pub fn resolve_subshape_id(&self, key_id: usize) -> Option<i32> {
-        for (link_key, child_id) in &self.links {
-            if *link_key == key_id {
-                return Some(*child_id);
-            }
-        }
-
-        None
+        self.links.get(&key_id).cloned()
     }
 
     /// Returns an existing shape for a new transition (additional property name to shape ID pair) ONLY IF the links has it.
     pub fn add_transition(&mut self, key_hash: usize, child_shape_id: i32) -> i32 {
-        if let Some((_, pre_link_child_shape_id)) = self.links.iter().find(|item| {
-            item.0 == key_hash
-        }) {
-            return *pre_link_child_shape_id;
+        if let Some(child_shape_id) = self.links.get(&key_hash) {
+            return *child_shape_id;
         }
 
-        self.links.push((key_hash, child_shape_id));
+        self.links.insert(key_hash, child_shape_id);
 
         child_shape_id
     }
 
     pub fn derive_child(&mut self, added_key: usize, child_shape_id: i32) -> Self {
-        self.links.push((added_key, child_shape_id));
+        self.links.insert(added_key, child_shape_id);
 
         Self {
             entries: {
@@ -75,7 +67,7 @@ impl Shape {
 
                 old_entries
             },
-            links: vec![],
+            links: HashMap::default(),
             parent: self.id,
             id: child_shape_id
         }
@@ -88,7 +80,8 @@ pub enum PropFlag {
     Writable = (1 << 0),
     Enumerable = (1 << 1),
     Configurable = (1 << 2),
-    IsAccessor = (1 << 4),
+    HasGetter = (1 << 4),
+    HasSetter = (1 << 5)
 }
 
 #[repr(u8)]
@@ -108,22 +101,35 @@ pub enum PropBody {
 
 #[derive(Debug, Clone)]
 pub struct Property {
-    pub body: PropBody,
-    pub flags: u8,
+    /// Stores `[[Value]]` or [[Get]] and `[[Set]]`.
+    pub body: [JSValue; 2],
+    pub flags: u8
 }
 
 impl Property {
     pub fn data(v: &JSValue, flags: u8) -> Self {
         Self {
-            body: PropBody::Data(*v),
+            body: [*v, JSValue::Undefined],
             flags
         }
     }
 
     pub fn accessor(getter: &JSValue, setter: &JSValue, flags: u8) -> Self {
         Self {
-            body: PropBody::Accessor((*getter, *setter)),
-            flags
+            body: [*getter, *setter],
+            flags: {
+                let mut temp_flags = flags;
+
+                if !getter.is_undefined() && !getter.is_null() {
+                    temp_flags |= PropFlag::HasGetter as u8;
+                }
+
+                if !setter.is_undefined() && !setter.is_null() {
+                    temp_flags |= PropFlag::HasSetter as u8;
+                }
+
+                temp_flags
+            }
         }
     }
 
@@ -137,6 +143,18 @@ impl Property {
 
     pub fn is_enumerable(&self) -> bool {
         0 != self.flags & PropFlag::Enumerable as u8
+    }
+
+    pub fn is_accessor(&self) -> bool {
+        (self.flags & (PropFlag::HasGetter as u8 | PropFlag::HasSetter as u8)) != 0
+    }
+
+    pub fn has_getter(&self) -> bool {
+        0 != (self.flags & PropFlag::HasGetter as u8)
+    }
+
+    pub fn has_setter(&self) -> bool {
+        0 != (self.flags & PropFlag::HasSetter as u8)
     }
 }
 
@@ -232,10 +250,7 @@ impl JSObjectWrap {
             }
         }
 
-        match &my_data.props.get(prop_offset.unwrap()).unwrap().body {
-            PropBody::Data(_) => false,
-            PropBody::Accessor((_, _)) => true
-        }
+        my_data.props.get(prop_offset.unwrap()).unwrap().is_accessor()
     }
 
     pub fn get_property_data_value(&self, ctx: &mut JSContext, key_id: usize, ic_id: u16, try_use_getter: bool) -> Option<JSValue> {
@@ -278,10 +293,13 @@ impl JSObjectWrap {
             }
         }
 
-        match &my_data.props.get(prop_offset.unwrap()).unwrap().body {
-            PropBody::Data(prop_v) => Some(*prop_v),
-            PropBody::Accessor((get_fn, set_fn)) => Some(if try_use_getter {*get_fn} else {*set_fn})
-        }
+        let prop_ref = my_data.props.get(prop_offset.unwrap()).unwrap();
+
+        Some(if !prop_ref.is_accessor() || try_use_getter {
+            prop_ref.body[0]
+        } else {
+            prop_ref.body[1]
+        })
     }
 
     pub fn get_property_data_mut(&mut self, ctx: &mut JSContext, key_id: usize, ic_id: u16) -> Option<&mut JSValue> {
@@ -314,11 +332,7 @@ impl JSObjectWrap {
             }
         }
 
-        match &mut my_data.props.get_mut(prop_offset.unwrap()).unwrap().body {
-            PropBody::Data(prop_v) => Some(prop_v),
-            // TODO: "invoke" this back in the opcode to evaluate getter logic.
-            PropBody::Accessor((getter, _)) => Some(getter)
-        }
+        my_data.props.get_mut(prop_offset.unwrap()).unwrap().body.first_mut()
     }
 
     pub fn set_property_data_mut(&mut self, ctx: &mut JSContext, key_id: usize, ic_id: u16, hint: AddPropHint, arg: &JSValue) -> bool {
@@ -342,21 +356,21 @@ impl JSObjectWrap {
         }
 
         if shape_dirty {
-            let maybe_old_shape_child_id = ctx.shapes.fetch_mut(my_shape_id).expect("Expected valid shape reference by ID in objects.rs ~ set_property_data_mut!").resolve_subshape_id(key_id);
+            let maybe_old_shape_child_id = ctx.shapes.fetch_mut(my_shape_id).unwrap().resolve_subshape_id(key_id);
 
             if let Some(existing_child_shape_id) = maybe_old_shape_child_id {
                 my_data.shape = existing_child_shape_id;
             } else {
                 let temp_child_shape = ctx.shapes.fetch_mut(my_shape_id).unwrap().derive_child(key_id, my_data.shape);
-                let temp_child_shape_id = ctx.shapes.store(temp_child_shape).expect("Exhausted shape IDs to i32::MAX in objects.rs ~ set_property_data_mut!");
+                let temp_child_shape_id = ctx.shapes.store(temp_child_shape).unwrap();
                 my_data.shape = temp_child_shape_id;
                 ctx.shapes.fetch_mut(my_shape_id).unwrap().add_transition(key_id, temp_child_shape_id);
             }
 
-            my_data.props.push(Property {
-                body: if hint == AddPropHint::Data {PropBody::Data(*arg)} else {PropBody::Accessor((JSValue::Undefined, JSValue::Undefined))},
-                flags: PropFlag::Writable as u8 | PropFlag::Configurable as u8
-            });
+            match hint {
+                AddPropHint::Data => my_data.props.push(Property::data(arg, PropFlag::Writable as u8 | PropFlag::Configurable as u8)),
+                _ => my_data.props.push(Property::accessor(&JSValue::Null, &JSValue::Null, PropFlag::Writable as u8 | PropFlag::Configurable as u8 | PropFlag::HasGetter as u8 | PropFlag::HasSetter as u8))
+            }
         }
 
         if ic_dirty {
@@ -365,20 +379,16 @@ impl JSObjectWrap {
             }
         }
 
-        match &mut my_data.props.get_mut(prop_offset.unwrap()).unwrap().body {
-            PropBody::Data(prop_v) => {
-                *prop_v = *arg;
-                true
-            },
-            PropBody::Accessor((getter, setter)) => {
-                if hint == AddPropHint::Getter {
-                    *getter = *arg;
-                } else {
-                    *setter = *arg;
-                }
+        let prop_index = prop_offset.unwrap();
 
-                true
-            }
+        if hint == AddPropHint::Setter {
+            my_data.props.get_mut(prop_index).unwrap().body[1] = *arg;
+            true
+        } else if hint != AddPropHint::Noop {
+            my_data.props.get_mut(prop_index).unwrap().body[0] = *arg;
+            true
+        } else {
+            false
         }
     }
 }
@@ -429,7 +439,7 @@ impl ItemPool<JSObjPtr, JS_OBJECT_COST> {
 
     fn next_id(&mut self) -> Option<i32> {
         let result = if !self.holes.is_empty() {
-            self.holes.pop().expect("Expected freed ID in ItemPool<JSObjPtr>::next_id()")
+            self.holes.pop().unwrap()
         } else {
             self.next_id += 1;
             self.next_id
