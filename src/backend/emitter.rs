@@ -1062,9 +1062,13 @@ impl Emitter {
         // ? Evaluate thisArg for callees. Cases below are explained.
         let callee_emit_hints = if callee.data.get_emitter_id() == SyntaxId::Lhs {
             hints.with_flag(EmitterFlag::HasThisArg)
-        } else {
+        } else if !hints.get_flag(EmitterFlag::IsFuncSimple) {
             self.emit_nonary_inst(Opcode::PushThisRef, 0); // Fill in this = [[env]].
             self.emit_nonary_inst(Opcode::Dup1, 0);
+
+            hints
+        } else {
+            self.emit_nonary_inst(Opcode::PushUndef, 0);
 
             hints
         };
