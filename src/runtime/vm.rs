@@ -173,8 +173,7 @@ unsafe fn op_get_var(context: &mut JSContext, stack: *mut JSValue) {
         let key_id = stack.add(context.sp as usize).as_ref_unchecked().get_str_id().unwrap_or(0) as usize;
         let ic_id = context.ip.read().flags & 0x7fff; // ! 16th bit saved as special flag IF an IC is present
 
-        // print!("op_get_var:\nenv_obj_id = ");
-        // dbg!(env_obj_id);
+        // println!("op_get_var:\nenv_obj_id = {env_obj_id}, key_id = {key_id}, ic_id = {ic_id}");
 
         if let Some(result_v) = context.get_property_data_value(env_obj_id, key_id, ic_id, false) {
             *stack.add(context.sp as usize) = result_v;
@@ -196,6 +195,7 @@ unsafe fn op_set_var(context: &mut JSContext, stack: *mut JSValue) {
         if context.set_property_data_mut(env_obj_id, key_id, ic_id,  AddPropHint::Data, temp_value) {
             context.sp -= 2;
             context.ip = context.ip.add(1);
+            // println!("DEBUG vm.rs ~ set_var: updated env of obj-id-{env_obj_id} with key-sid-{key_id}");
         } else {
             eprintln!("See vm.rs ~ op_set_var");
             context.status = EvalStatus::BadAccess;
@@ -393,6 +393,18 @@ unsafe fn op_dec_prop(context: &mut JSContext, stack: *mut JSValue) {
             context.set_property_data_mut(target_obj_id, prop_key_id as usize, ip_flags & 0x7fff, AddPropHint::Data, &prop_updated_num);
         }
 
+        context.ip = context.ip.add(1);
+    }
+}
+
+/// **NOTE:** Converts a function reference on the stack into a closure that uses the current env or a child env.
+unsafe fn op_make_closure(context: &mut JSContext, stack: *mut JSValue) {
+    unsafe {
+        let callable_oid = stack.add(context.sp as usize).as_ref_unchecked().get_obj_id().unwrap_or(DUD_POOL_ID);
+
+        // println!("DEBUG vm.rs, op_make_closure:\ncallable_oid = {callable_oid}");
+
+        *stack.add(context.sp as usize) = context.create_closure_obj(callable_oid);
         context.ip = context.ip.add(1);
     }
 }
@@ -807,6 +819,7 @@ pub fn run_vm(context: &mut JSContext) -> EvalStatus {
                 Opcode::DecLocal => op_dec_local(context, stack_base_ptr),
                 Opcode::IncProp => op_inc_prop(context, stack_base_ptr),
                 Opcode::DecProp => op_dec_prop(context, stack_base_ptr),
+                Opcode::MakeClosure => op_make_closure(context, stack_base_ptr),
                 Opcode::ForceBool => op_force_bool(context, stack_base_ptr),
                 Opcode::ForceNum => op_force_num(context, stack_base_ptr),
                 Opcode::NegBool => op_neg_bool(context, stack_base_ptr),
@@ -835,9 +848,6 @@ pub fn run_vm(context: &mut JSContext) -> EvalStatus {
                 Opcode::CallCtor => op_call_ctor(context, stack_base_ptr),
                 Opcode::NativeCall => op_native_call(context, stack_base_ptr),
                 Opcode::Ret => op_ret(context, stack_base_ptr),
-                // _ => {
-                //     context.status = EvalStatus::BadOp;
-                // }
             };
         }
     }

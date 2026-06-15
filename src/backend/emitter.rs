@@ -6,7 +6,8 @@ use crate::frontend::{
     ast::{Operator, SyntaxId, SyntaxData, SyntaxNode, PropDecl, PropDeclTag, AST},
 };
 
-use crate::runtime::objects::{ExoticObject, JSOpaque};
+use crate::runtime::opaque::JSOpaque;
+use crate::runtime::objects::{ExoticObject};
 use crate::runtime::{
     code::{InlineCache, JSFuncFlag, Opcode, Instruction, Chunk, Program},
     values::{JSValue},
@@ -15,8 +16,8 @@ use crate::runtime::{
 };
 
 
-pub const JS_BOOLEAN_PROTO_ALIAS: &str = "[[Array.prototype]]";
-pub const JS_NUMBER_PROTO_ALIAS: &str = "[[Array.prototype]]";
+pub const JS_BOOLEAN_PROTO_ALIAS: &str = "[[Boolean.prototype]]";
+pub const JS_NUMBER_PROTO_ALIAS: &str = "[[Number.prototype]]";
 pub const JS_OBJECT_PROTO_ALIAS: &str = "[[Object.prototype]]";
 pub const JS_ARRAY_PROTO_ALIAS: &str = "[[Array.prototype]]";
 pub const JS_FUNC_PROTO_ALIAS: &str = "[[Function.prototype]]";
@@ -670,11 +671,13 @@ impl Emitter {
             Box::new(self.chunks.pop().unwrap())
         ).as_mut());
 
+        // ! Mark function code as requiring an environment via compile-time heuristics, as this will be checked at runtime to decide whether to not elide an environment allocation / use local offsets instead.
+        unsafe {
+            code_ptr.as_mut_unchecked().flags = if !func_is_simple {JSFuncFlag::NeedsEnv as u8} else {0};
+        }
+
         let Some(func_oid) = self.heap.add_item(Some(RefCell::new(
-            ExoticObject::with_opaque(JSOpaque::bytecode(
-                code_ptr,
-                if !func_is_simple {JSFuncFlag::NeedsEnv as u8} else {0},
-            ))
+            ExoticObject::with_opaque(JSOpaque::bytecode(code_ptr))
         ))) else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
         self.scopes.pop();
@@ -682,6 +685,11 @@ impl Emitter {
         let Some(func_const_id) = self.record_constant("", JSValue::ObjectId(func_oid)) else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
         self.emit_unary_inst(Opcode::PushConst, func_const_id.id, 0);
+
+        // ! Do not create closures at scope-level 1, as returned functions from top-level code are dead closures anyways.
+        if !func_specific_hints.get_flag(EmitterFlag::IsFuncSimple) && self.scopes.len() > 1 {
+            self.emit_nonary_inst(Opcode::MakeClosure, 0);
+        }
 
         hints
     }
@@ -1065,9 +1073,8 @@ impl Emitter {
         // ? Evaluate thisArg for callees. Cases below are explained.
         let callee_emit_hints = if callee.data.get_emitter_id() == SyntaxId::Lhs {
             hints.with_flag(EmitterFlag::HasThisArg)
-        } else if !hints.get_flag(EmitterFlag::IsFuncSimple) {
-            self.emit_nonary_inst(Opcode::PushThisRef, 0); // Fill in this = [[env]].
-            self.emit_nonary_inst(Opcode::Dup1, 0);
+        } else if self.scopes.len() < 2 {
+            self.emit_nonary_inst(Opcode::PushThisRef, 0); // Fill in globalThis = [[global-env]].
 
             hints
         } else {
@@ -1195,12 +1202,14 @@ impl Emitter {
             Box::new(self.chunks.pop().unwrap())
         ).as_mut());
 
+        // ! Mark function code as requiring an environment via compile-time heuristics, as this will be checked at runtime to decide whether to not elide an environment allocation / use local offsets instead.
+        unsafe {
+            code_ptr.as_mut_unchecked().flags = if !func_is_simple {JSFuncFlag::NeedsEnv as u8} else {0};
+        }
+
         let Some(func_oid) = self.heap.add_item(Some(RefCell::new(
             ExoticObject::with_opaque(
-                JSOpaque::bytecode(
-                    code_ptr,
-                    if !func_is_simple {JSFuncFlag::NeedsEnv as u8} else {0},
-                )
+                JSOpaque::bytecode(code_ptr)
             )
         ))) else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
@@ -1213,6 +1222,11 @@ impl Emitter {
             if let Some(outer_func_key_locus) = self.resolve_global_string(func_name, true) {
                 self.emit_unary_inst(Opcode::PushStr, outer_func_key_locus.id, 0);
                 self.emit_unary_inst(Opcode::PushConst, func_const_id.id, 0);
+
+                // ! Like emit_lambda, do not allocate any closure wrapping a top-level function, as it would be unreachable after program finish.
+                if !func_specific_hints.get_flag(EmitterFlag::IsFuncSimple) && self.scopes.len() > 1 {
+                    self.emit_nonary_inst(Opcode::MakeClosure, 0);
+                }
 
                 let set_func_prop_ip = self.emit_nonary_inst(Opcode::SetVar, 0);
                 self.put_ic_of_inst(set_func_prop_ip);
