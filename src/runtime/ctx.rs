@@ -215,12 +215,8 @@ impl JSContext {
                     eprintln!("Failed to get function code of ferrojs-oid-{func_oid}");
                     None
                 } else {
-                    let env_value = self.create_child_env();
-
-                    println!("DEBUG ctx.rs ~ create_closure_obj, env_value = {env_value}");
-
                     Some(JSClosure::new(
-                        env_value,
+                        self.create_child_env(),
                         func_code
                     ))
                 }
@@ -264,7 +260,7 @@ impl JSContext {
         unsafe {
             let (chunk_p, env_v) = match tag {
                 JSInternalTag::Code => {
-                    println!("DEBUG ctx.rs ~ try_invoke_obj: run normal function of oid-{}", func_oid);
+                    // println!("DEBUG ctx.rs ~ try_invoke_obj: run normal function of oid-{}", func_oid);
                     (
                         internal.code,
                         if 0 != (internal.code.as_ref().unwrap().flags & JSFuncFlag::NeedsEnv as u8) {
@@ -275,13 +271,13 @@ impl JSContext {
                     )
                 },
                 JSInternalTag::ClosureID => {
-                    println!("DEBUG ctx.rs ~ try_invoke_obj: run closure-id-{}", internal.closure_id);
+                    // println!("DEBUG ctx.rs ~ try_invoke_obj: run closure-id-{}", internal.closure_id);
                     let JSClosure {env, code} = self.closures.get_item(internal.closure_id).expect("Expected valid closure at ctx.rs ~ try_invoke_obj");
 
                     (*code, *env)
                 },
                 _ => {
-                    println!("DEBUG ctx.rs ~ try_invoke_obj: invalid, non-callable object...");
+                    // println!("DEBUG ctx.rs ~ try_invoke_obj: invalid, non-callable object...");
                     (std::ptr::null_mut(), JSValue::Undefined)
                 }
             };
