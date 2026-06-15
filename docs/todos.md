@@ -5,7 +5,6 @@
  - Support simple functions.
  - Support simple objects with property semantics: data vs. accessor.
  - Implement closures.
-   - Add RET_CLOSURE support.
  - Support assignment op results, conditional ternary op.
  - Add `typeof`, `delete`
    - TypeOf results:
