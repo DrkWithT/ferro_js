@@ -34,6 +34,7 @@ pub enum Opcode {
     DecLocal,
     IncProp,
     DecProp,
+    MakeClosure,
     ForceBool,
     ForceNum,
     NegBool,
@@ -94,6 +95,7 @@ pub const OPCODE_NAMES: &[&str] = &[
     "DecLocal",
     "IncProp",
     "DecProp",
+    "MakeClosure",
     "ForceBool",
     "ForceNum",
     "NegBool",
@@ -307,10 +309,14 @@ pub struct Program {
     pub name: String,
 }
 
-pub fn dump_chunk(chunk: &Chunk, id_num: u16) {
+pub fn dump_chunk(chunk: &Chunk, id_num: Option<u16>) {
     let Chunk { consts, code , .. } = chunk;
 
-    println!("---- Chunk of oid-{id_num} ----\n\n");
+    if let Some(chunk_id) = id_num {
+        println!("---- Chunk of oid-{chunk_id} ----\n\n");
+    } else {
+        println!("---- Chunk of MAIN ----\n\n");
+    }
 
     println!("--- CONSTS ---\n");
 
@@ -330,9 +336,9 @@ pub fn dump_chunk(chunk: &Chunk, id_num: u16) {
 pub fn dump_bytecode(program: &Program) {
     let Program {heap , chunks, name, ..} = program;
 
-    println!("---- PROGRAM '{name}' ----\n");
+    println!("---- PROGRAM '{name}' ----\n--- MAIN ---\n");
 
-    dump_chunk(chunks.first().unwrap(), 0);
+    dump_chunk(chunks.last().unwrap(), None);
 
     println!("--- FUNCTIONS ---\n");
 
@@ -346,7 +352,7 @@ pub fn dump_bytecode(program: &Program) {
                     let flags = chunk_ptr.as_ref_unchecked().flags;
 
                     println!("\x1b[1;33mFunction\x1b[0m(arity = \x1b[1;31m{arity}\x1b[0m, flags = \x1b[1;31m{flags}\x1b[0m)\n");
-                    dump_chunk(chunk_ptr.as_ref_unchecked(), oid as u16);
+                    dump_chunk(chunk_ptr.as_ref_unchecked(), Some(oid as u16));
                 }
             }
         }

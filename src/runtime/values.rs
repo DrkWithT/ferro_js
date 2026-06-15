@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
-use crate::runtime::objects::{JS_OBJECT_COST, JSInternalTag, JSObjPtr, ItemPool};
+use crate::runtime::opaque::JSInternalTag;
+use crate::runtime::objects::{JS_OBJECT_COST, JSObjPtr, ItemPool};
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
