@@ -5,7 +5,11 @@
  - Support simple functions.
  - Support simple objects with property semantics: data vs. accessor.
  - Implement closures.
- - Support relational ops, bitshifts, conditional ternary op, assignment op results.
+ - Support relational ops, bitshifts, conditional ternary op, assignment op, comma.
+   - Grammar:
+      - `<conditional> = <or> ( "?" <assign> ":" <assign> )?`
+      - `<assign> = <arrow-function> | <conditional> ( "=" <assign> )?`
+      - `<expr-stmt> = <assign> ";"`
  - Add `typeof`, `delete`
    - TypeOf results:
       - Undefined: `"undefined"`
@@ -18,7 +22,8 @@
       - functions: `"function"`
    - Delete result:
       - The operation succeeds with `true` when property is non-accessor AND configurable.
-      - NOTE: writable + configurable + enumerable are 3 important flags per property. 
+      - NOTE: writable + configurable + enumerable are 3 important flags per property to check at runtime.
+         - Maybe Shapes should store this metadata.
  - Support strings.
  - Refactor codebase into modular, Dep. Injected driver.
 
