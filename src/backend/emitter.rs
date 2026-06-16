@@ -386,7 +386,7 @@ impl Emitter {
 
         if name_info.2 {
             let name_opcode = name_info.1;
-            let Some(named_info) = self.cached_info else { dbg!(name_in_locator, name_lacks_env); println!("\n\tNote: could not resolve name '{lexeme}'."); return hints.without_flag(EmitterFlag::IsVisitOK); };
+            let Some(named_info) = self.cached_info else { println!("\n\tNote: could not resolve name '{lexeme}'."); return hints.without_flag(EmitterFlag::IsVisitOK); };
             
             self.emit_unary_inst(name_opcode, named_info.id, 0);
         }
@@ -631,8 +631,6 @@ impl Emitter {
         // ? Pre-check during generation via prepass: if there's nested scopes / captured names / closure returns, an environment is needed at runtime for the function (now considered complex).
         let func_is_simple = self.emit_node(src_text, body, ast, pre_param_check_hints).get_flag(EmitterFlag::IsFuncSimple) || hints.get_flag(EmitterFlag::InMethod);
 
-        dbg!(func_is_simple); // ! debug
-
         // ! Delete the mock parameter entries to not confuse the emission's name resolution.
         self.scopes.last_mut().unwrap().symbols.clear();
 
@@ -666,7 +664,7 @@ impl Emitter {
             hints.without_flag(EmitterFlag::IsFuncSimple)
         };
 
-        println!("func_specific_hints.is_func_simple for lambda body emission... {}", func_specific_hints.get_flag(EmitterFlag::IsFuncSimple)); // ! debug
+        // println!("func_specific_hints.is_func_simple for lambda body emission... {}", func_specific_hints.get_flag(EmitterFlag::IsFuncSimple));
 
         if !self.emit_node(
             src_text,

@@ -277,7 +277,7 @@ impl JSContext {
                     (*code, *env)
                 },
                 _ => {
-                    println!("DEBUG ctx.rs ~ try_invoke_obj: invalid, non-callable object...");
+                    // println!("DEBUG ctx.rs ~ try_invoke_obj: invalid, non-callable object...");
                     (std::ptr::null_mut(), JSValue::Undefined)
                 }
             };
@@ -308,8 +308,6 @@ impl JSContext {
         }
 
         self.cd += 1;
-
-        dbg!(func_oid, self.cd, self.ip, self.cvp, self.icp);
 
         EvalStatus::Pending
     }
@@ -430,33 +428,28 @@ impl JSContext {
 
     pub fn get_property_data_value(&mut self, oid: i32, key_id: usize, ic_id: u16, try_use_getter: bool) -> Option<JSValue> {
         if oid == DUD_POOL_ID {
-            println!("End of object parent chain found.");
             return None;
         }
 
-        println!("key of str-id-{key_id}: '{}'", self.spool.get_item(key_id as i32).expect("Expected valid string constant for ID in get_property_data_value"));
+        // println!("key of str-id-{key_id}: '{}'", self.spool.get_item(key_id as i32).expect("Expected valid string constant for ID in get_property_data_value"));
 
         let my_shape_id = self.heap.get_item(oid).unwrap().shape;
 
-        println!("DEBUG get_property_data_value: oid = {oid}, key_id = {key_id}");
+        // println!("DEBUG get_property_data_value: oid = {oid}, key_id = {key_id}");
 
         let (prop_offset, ic_dirty) = unsafe {
             if let Some (ic_slot) = self.icp.add(ic_id as usize).as_mut().unwrap().find(my_shape_id, key_id) {
-                println!("Debug: try IC...");
-                dbg!(my_shape_id, key_id);
+                // println!("Debug: try IC...");
+                // dbg!(my_shape_id, key_id);
                 (Some(ic_slot), false)
             } else if let Some(slow_prop_ref) = self.shapes.fetch(my_shape_id) {
-                println!("Debug: try Shape...");
-                dbg!(my_shape_id, key_id);
+                // println!("Debug: try Shape...");
+                // dbg!(my_shape_id, key_id);
                 (slow_prop_ref.resolve_offset(key_id), true)
             } else { (None, true) }
         };
 
         let parent_env_oid = self.heap.get_item(oid).unwrap().in_proto.get_obj_id();
-
-        // println!("In objects.rs at JSObjectWrap::get_property_data_value:");
-        // dbg!(my_data.in_proto);
-        // dbg!(prop_offset);
 
         if prop_offset.is_none() {
             let parent_oid = parent_env_oid.unwrap_or(DUD_POOL_ID);
@@ -510,8 +503,8 @@ impl JSContext {
     pub fn set_property_data_mut(&mut self, oid: i32, key_id: usize, ic_id: u16, hint: AddPropHint, arg: &JSValue) -> bool {
         let my_shape_id = self.heap.get_item(oid).unwrap().shape;
 
-        println!("key of str-id-{key_id}: '{}'", self.spool.get_item(key_id as i32).expect("Expected valid string constant for ID in set_property_data_mut"));
-        println!("DEBUG set_property_data_mut: oid = {oid}, key_id = {key_id}");
+        // println!("key of str-id-{key_id}: '{}'", self.spool.get_item(key_id as i32).expect("Expected valid string constant for ID in set_property_data_mut"));
+        // println!("DEBUG set_property_data_mut: oid = {oid}, key_id = {key_id}");
 
         let (prop_offset, ic_dirty, shape_dirty) = unsafe {
             if let Some (ic_slot) = self.icp.add(ic_id as usize).as_mut().unwrap().find(my_shape_id, key_id) {
