@@ -533,7 +533,6 @@ unsafe fn op_sub(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
-#[allow(unused)]
 unsafe fn op_bt_flip(context: &mut JSContext, stack: *mut JSValue) {
     unsafe {
         let arg_p = stack.add(context.sp as usize);
@@ -545,7 +544,38 @@ unsafe fn op_bt_flip(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
-#[allow(unused)]
+unsafe fn op_bt_ls(context: &mut JSContext, stack: *mut JSValue) {
+    context.sp -= 1;
+
+    unsafe {
+        let lhs_p = stack.add(context.sp as usize);
+        let rhs_sh = context.jsvalue_to_u32(
+            stack.add(context.sp as usize + 1).as_ref_unchecked()
+        ) & 0x1F;
+
+        *lhs_p = JSValue::Number(
+            (context.jsvalue_to_i32(lhs_p.as_ref_unchecked()) << rhs_sh) as f64
+        );
+        context.ip = context.ip.add(1);
+    }
+}
+
+unsafe fn op_bt_rs(context: &mut JSContext, stack: *mut JSValue) {
+    context.sp -= 1;
+
+    unsafe {
+        let lhs_p = stack.add(context.sp as usize);
+        let rhs_sh = context.jsvalue_to_u32(
+            stack.add(context.sp as usize + 1).as_ref_unchecked()
+        ) & 0x1F;
+
+        *lhs_p = JSValue::Number(
+            (context.jsvalue_to_i32(lhs_p.as_ref_unchecked()) >> rhs_sh) as f64
+        );
+        context.ip = context.ip.add(1);
+    }
+}
+
 unsafe fn op_bt_and(context: &mut JSContext, stack: *mut JSValue) {
     context.sp -= 1;
 
@@ -560,7 +590,6 @@ unsafe fn op_bt_and(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
-#[allow(unused)]
 unsafe fn op_bt_xor(context: &mut JSContext, stack: *mut JSValue) {
     context.sp -= 1;
 
@@ -575,7 +604,6 @@ unsafe fn op_bt_xor(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
-#[allow(unused)]
 unsafe fn op_bt_or(context: &mut JSContext, stack: *mut JSValue) {
     context.sp -= 1;
 
@@ -626,7 +654,6 @@ unsafe fn op_strict_ne(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
-#[allow(unused)]
 unsafe fn op_loose_eq(context: &mut JSContext, stack: *mut JSValue) {
     context.sp -= 1;
 
@@ -651,7 +678,6 @@ unsafe fn op_loose_eq(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
-#[allow(unused)]
 unsafe fn op_loose_ne(context: &mut JSContext, stack: *mut JSValue) {
     context.sp -= 1;
 
@@ -676,10 +702,31 @@ unsafe fn op_loose_ne(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
-#[allow(unused)]
 unsafe fn op_lt(context: &mut JSContext, stack: *mut JSValue) {
-    // todo
-    context.status = EvalStatus::BadOp;
+    context.sp -= 1;
+
+    unsafe {
+        let lhs_v = stack.add(context.sp as usize).as_ref_unchecked();
+        let rhs_v = stack.add(context.sp as usize + 1).as_ref_unchecked();
+
+        if let Some(lhs_sid) = lhs_v.get_str_id() && let Some(rhs_sid) = rhs_v.get_str_id() {
+            let lhs_str = context.spool.get_item(lhs_sid).expect("Expected LHS string at op_lt");
+            let rhs_str = context.spool.get_item(rhs_sid).expect("Expected LHS string at op_lt");
+
+            *stack.add(context.sp as usize) = JSValue::Boolean(lhs_str < rhs_str);
+        } else {
+            let lhs_num = context.jsvalue_to_number(lhs_v);
+            let rhs_num = context.jsvalue_to_number(rhs_v);
+
+            if lhs_num.is_nan() || rhs_num.is_nan() {
+                *stack.add(context.sp as usize) = JSValue::Undefined;
+            } else {
+                *stack.add(context.sp as usize) = JSValue::Boolean(lhs_num < rhs_num);
+            }
+        }
+
+        context.ip = context.ip.add(1);
+    }
 }
 
 #[allow(unused)]
@@ -688,10 +735,31 @@ unsafe fn op_lte(context: &mut JSContext, stack: *mut JSValue) {
     context.status = EvalStatus::BadOp;
 }
 
-#[allow(unused)]
 unsafe fn op_gt(context: &mut JSContext, stack: *mut JSValue) {
-    // todo
-    context.status = EvalStatus::BadOp;
+    context.sp -= 1;
+
+    unsafe {
+        let lhs_v = stack.add(context.sp as usize).as_ref_unchecked();
+        let rhs_v = stack.add(context.sp as usize + 1).as_ref_unchecked();
+
+        if let Some(lhs_sid) = lhs_v.get_str_id() && let Some(rhs_sid) = rhs_v.get_str_id() {
+            let lhs_str = context.spool.get_item(lhs_sid).expect("Expected LHS string at op_lt");
+            let rhs_str = context.spool.get_item(rhs_sid).expect("Expected LHS string at op_lt");
+
+            *stack.add(context.sp as usize) = JSValue::Boolean(lhs_str > rhs_str);
+        } else {
+            let lhs_num = context.jsvalue_to_number(lhs_v);
+            let rhs_num = context.jsvalue_to_number(rhs_v);
+
+            if lhs_num.is_nan() || rhs_num.is_nan() {
+                *stack.add(context.sp as usize) = JSValue::Undefined;
+            } else {
+                *stack.add(context.sp as usize) = JSValue::Boolean(lhs_num > rhs_num);
+            }
+        }
+
+        context.ip = context.ip.add(1);
+    }
 }
 
 #[allow(unused)]
@@ -830,6 +898,8 @@ pub fn run_vm(context: &mut JSContext) -> EvalStatus {
                 Opcode::Add => op_add(context, stack_base_ptr),
                 Opcode::Sub => op_sub(context, stack_base_ptr),
                 Opcode::BtFlip => op_bt_flip(context, stack_base_ptr),
+                Opcode::BtLs => op_bt_ls(context, stack_base_ptr),
+                Opcode::BtRs => op_bt_rs(context, stack_base_ptr),
                 Opcode::BtAnd => op_bt_and(context, stack_base_ptr),
                 Opcode::BtOr => op_bt_or(context, stack_base_ptr),
                 Opcode::BtXor => op_bt_xor(context, stack_base_ptr),
@@ -837,8 +907,8 @@ pub fn run_vm(context: &mut JSContext) -> EvalStatus {
                 Opcode::StrictNe => op_strict_ne(context, stack_base_ptr),
                 Opcode::LooseEq => op_loose_eq(context, stack_base_ptr),
                 Opcode::LooseNe => op_loose_ne(context, stack_base_ptr),
-                Opcode::Lt => op_lt(context, stack_base_ptr),
-                Opcode::Lte => op_lte(context, stack_base_ptr),
+                Opcode::Lt => op_lt(context, stack_base_ptr), // todo
+                Opcode::Lte => op_lte(context, stack_base_ptr), // todo
                 Opcode::Gt => op_gt(context, stack_base_ptr),
                 Opcode::Gte => op_gte(context, stack_base_ptr),
                 Opcode::JumpIf => op_jump_if(context, stack_base_ptr),
