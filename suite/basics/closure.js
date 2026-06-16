@@ -1,11 +1,9 @@
 function makeTest1() {
     var a = 67;
 
-    function foo() {
+    return (function() {
         return a;
-    }
-
-    return foo;
+    });
 }
 
 var f = makeTest1();

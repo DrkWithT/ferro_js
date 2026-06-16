@@ -5,7 +5,7 @@
  - Support simple functions.
  - Support simple objects with property semantics: data vs. accessor.
  - Implement closures.
- - Support assignment op results, conditional ternary op.
+ - Support relational ops, bitshifts, conditional ternary op, assignment op results.
  - Add `typeof`, `delete`
    - TypeOf results:
       - Undefined: `"undefined"`
