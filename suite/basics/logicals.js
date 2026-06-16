@@ -14,4 +14,4 @@ if (!c === true) {
     ok++;
 }
 
-ok === 3;
+return ok === 3;

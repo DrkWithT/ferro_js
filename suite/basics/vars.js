@@ -2,11 +2,11 @@
 var a = 1, b, ok = 0;
 
 if (a === 1) {
-    ok = ok + 1;
+    ok++;
 }
 
 if (b === undefined) {
-    ok = ok + 1;
+    ok++;
 }
 
-ok === 2;
+return ok === 2;

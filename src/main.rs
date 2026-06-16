@@ -137,12 +137,13 @@ fn main() -> ExitCode {
     let mut vm_state = JSContext::new(DEFAULT_SHAPE_POPULATION, DEFAULT_JS_STACK_SIZE, DEFAULT_JS_RECUR_LIMIT, program);
 
     let vm_status = run_vm(&mut vm_state);
+    let vm_result = vm_state.stack[0];
 
-    println!("{}", vm_state.stack[0]);
+    println!("{}", vm_result);
 
     println!("Finish status: {vm_status}");
 
-    if vm_status == EvalStatus::Ok {
+    if vm_status == EvalStatus::Ok && vm_result.get_boolean() {
         ExitCode::SUCCESS
     } else {
         ExitCode::FAILURE

@@ -8,4 +8,4 @@ function makeTest1() {
 
 var f = makeTest1();
 
-f() === 67;
+return f() === 67;
