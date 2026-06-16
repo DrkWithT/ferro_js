@@ -167,13 +167,30 @@ unsafe fn op_set_local(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
+unsafe fn op_init_var(context: &mut JSContext, stack: *mut JSValue) {
+    unsafe {
+        let Some(env_obj_id) = context.frames.last().expect("Expected JS lexical environment in vm.rs: op_set_var").env_v.get_obj_id() else { context.status = EvalStatus::BadAccess; return; };
+
+        let key_id = stack.add(context.sp as usize - 1).as_ref_unchecked().get_str_id().unwrap_or(0) as usize;
+        let temp_value = stack.add(context.sp as usize).as_ref_unchecked();
+        let ic_id = context.ip.read().flags & 0x7fff;
+
+        if context.set_property_data_mut(env_obj_id, key_id, ic_id,  AddPropHint::Data, temp_value) {
+            context.sp -= 2;
+            context.ip = context.ip.add(1);
+        } else {
+            eprintln!("See vm.rs ~ op_init_var");
+            context.status = EvalStatus::BadAccess;
+        }
+    }
+}
+
 unsafe fn op_get_var(context: &mut JSContext, stack: *mut JSValue) {
     unsafe {
         let Some(env_obj_id) = context.frames.last().expect("Expected JS lexical environment in vm.rs: op_get_var").env_v.get_obj_id() else { context.status = EvalStatus::BadAccess; return; };
+
         let key_id = stack.add(context.sp as usize).as_ref_unchecked().get_str_id().unwrap_or(0) as usize;
         let ic_id = context.ip.read().flags & 0x7fff; // ! 16th bit saved as special flag IF an IC is present
-
-        // println!("op_get_var:\nenv_obj_id = {env_obj_id}, key_id = {key_id}, ic_id = {ic_id}");
 
         if let Some(result_v) = context.get_property_data_value(env_obj_id, key_id, ic_id, false) {
             *stack.add(context.sp as usize) = result_v;
@@ -186,16 +203,18 @@ unsafe fn op_get_var(context: &mut JSContext, stack: *mut JSValue) {
 }
 
 unsafe fn op_set_var(context: &mut JSContext, stack: *mut JSValue) {
+    context.sp -= 1;
+
     unsafe {
         let Some(env_obj_id) = context.frames.last().expect("Expected JS lexical environment in vm.rs: op_set_var").env_v.get_obj_id() else { context.status = EvalStatus::BadAccess; return; };
-        let key_id = stack.add(context.sp as usize - 1).as_ref_unchecked().get_str_id().unwrap_or(0) as usize;
-        let temp_value = stack.add(context.sp as usize).as_ref_unchecked();
+
+        let key_id = stack.add(context.sp as usize).as_ref_unchecked().get_str_id().unwrap_or(0) as usize;
+        let temp_value = stack.add(context.sp as usize + 1).as_ref_unchecked();
         let ic_id = context.ip.read().flags & 0x7fff;
 
         if context.set_property_data_mut(env_obj_id, key_id, ic_id,  AddPropHint::Data, temp_value) {
-            context.sp -= 2;
+            *stack.add(context.sp as usize) = *temp_value;
             context.ip = context.ip.add(1);
-            // println!("DEBUG vm.rs ~ set_var: updated env of obj-id-{env_obj_id} with key-sid-{key_id}");
         } else {
             eprintln!("See vm.rs ~ op_set_var");
             context.status = EvalStatus::BadAccess;
@@ -875,6 +894,7 @@ pub fn run_vm(context: &mut JSContext) -> EvalStatus {
                 Opcode::Discard => op_discard(context, stack_base_ptr),
                 Opcode::GetLocal => op_get_local(context, stack_base_ptr),
                 Opcode::SetLocal => op_set_local(context, stack_base_ptr),
+                Opcode::InitVar => op_init_var(context, stack_base_ptr),
                 Opcode::GetVar => op_get_var(context, stack_base_ptr),
                 Opcode::SetVar => op_set_var(context, stack_base_ptr),
                 Opcode::MakeObj => op_make_obj(context, stack_base_ptr),
