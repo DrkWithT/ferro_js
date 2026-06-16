@@ -6,12 +6,12 @@ if (a ? b : c === -1) {
     ok++;
 }
 
-if (c ? a : b === 1) {
+if (c ? a : b === -1) {
     ok++;
 }
 
 // should set b as 0
-b < c ? b = c : b++;
+b < c ? (b = c) : b++;
 
 if (b === 0) {
     ok++;
