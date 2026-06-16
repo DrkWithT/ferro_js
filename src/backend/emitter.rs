@@ -1,6 +1,7 @@
 use std::collections::{HashMap};
 use std::cell::{RefCell};
 
+use crate::backend::emitter::EmitterFlag::InLocator;
 use crate::frontend::{
     token::{TokenKind, Token},
     ast::{Operator, SyntaxId, SyntaxData, SyntaxNode, PropDecl, PropDeclTag, AST},
@@ -652,7 +653,7 @@ impl Emitter {
 
                 self.emit_unary_inst(Opcode::PushStr, param_key_sid.id, 0);
                 self.emit_unary_inst(Opcode::GetLocal, param_pos as i32 + 1, 0);
-                self.emit_nonary_inst(Opcode::SetVar, 0);
+                self.emit_nonary_inst(Opcode::InitVar, 0);
             }
         }
 
@@ -1040,6 +1041,52 @@ impl Emitter {
         hints
     }
 
+    fn emit_cond(&mut self, src_text: &str, node_data: &SyntaxData, ast: &AST, mut hints: EmitterHints) -> EmitterHints {
+        let SyntaxData::Cond {check, l, r} = node_data else { return hints.without_flag(EmitterFlag::IsVisitOK); };
+
+        if hints.get_flag(EmitterFlag::CheckFnIsSimple) {
+            if !self.emit_node(src_text, check, ast, hints).get_flag(EmitterFlag::IsFuncSimple) {
+                hints.disable_flag(EmitterFlag::IsFuncSimple);
+            }
+
+            if !self.emit_node(src_text, l, ast, hints).get_flag(EmitterFlag::IsFuncSimple) {
+                hints.disable_flag(EmitterFlag::IsFuncSimple);
+            }
+
+            if !self.emit_node(src_text, r, ast, hints).get_flag(EmitterFlag::IsFuncSimple) {
+                hints.disable_flag(EmitterFlag::IsFuncSimple);
+            }
+
+            return hints;
+        }
+
+        if !self.emit_node(src_text, check, ast, hints.without_flag(InLocator)).check_ok() {
+            return hints.without_flag(EmitterFlag::IsVisitOK);
+        }
+
+        let cond_jump_ip = self.chunks.last().expect("Expected available chunk at emitter.rs ~ emit_cond for cond LHS.").code.len() as i32;
+        self.emit_unary_inst(Opcode::JumpElse, 0, 0);
+
+        if !self.emit_node(src_text, l, ast, hints.without_flag(EmitterFlag::InLocator)).check_ok() {
+            return hints.without_flag(EmitterFlag::IsVisitOK);
+        }
+
+        let cond_skip_r_ip = self.chunks.last().expect("Expected available chunk at emitter.rs ~ emit_cond for cond RHS.").code.len() as i32;
+        self.emit_unary_inst(Opcode::Jump, 0, 0);
+
+        let cond_begin_r_ip = cond_skip_r_ip + 1;
+        if !self.emit_node(src_text, r, ast, hints.without_flag(EmitterFlag::InLocator)).check_ok() {
+            return hints.without_flag(EmitterFlag::IsVisitOK);
+        }
+
+        let cond_end_ip = self.chunks.last().unwrap().code.len() as i32;
+
+        self.chunks.last_mut().unwrap().code.get_mut(cond_jump_ip as usize).unwrap().arg = cond_begin_r_ip - cond_jump_ip;
+        self.chunks.last_mut().unwrap().code.get_mut(cond_skip_r_ip as usize).unwrap().arg = cond_end_ip - cond_skip_r_ip;
+
+        hints
+    }
+
     fn emit_assign(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, mut hints: EmitterHints) -> EmitterHints {
         let SyntaxData::Assign {dest, src} = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
@@ -1226,7 +1273,7 @@ impl Emitter {
 
                 self.emit_unary_inst(Opcode::PushStr, param_key_sid.id, 0);
                 self.emit_unary_inst(Opcode::GetLocal, param_pos as i32 + 1, 0);
-                self.emit_nonary_inst(Opcode::SetVar, 0);
+                self.emit_nonary_inst(Opcode::InitVar, 0);
             }
         }
 
@@ -1265,7 +1312,7 @@ impl Emitter {
                     self.emit_nonary_inst(Opcode::MakeClosure, 0);
                 }
 
-                let set_func_prop_ip = self.emit_nonary_inst(Opcode::SetVar, 0);
+                let set_func_prop_ip = self.emit_nonary_inst(Opcode::InitVar, 0);
                 self.put_ic_of_inst(set_func_prop_ip);
 
                 hints
@@ -1396,7 +1443,7 @@ impl Emitter {
                     self.emit_nonary_inst(Opcode::PushUndef, 0);
                 }
 
-                let var_init_ic_ip = self.emit_nonary_inst(Opcode::SetVar, 0);
+                let var_init_ic_ip = self.emit_nonary_inst(Opcode::InitVar, 0);
                 self.put_ic_of_inst(var_init_ic_ip);
             }
         }
@@ -1543,7 +1590,11 @@ impl Emitter {
             return hints;
         }
 
-        self.emit_node(src_text, inner, ast, hints.without_flag(EmitterFlag::InLocator))
+        let result_hints = self.emit_node(src_text, inner, ast, hints.without_flag(EmitterFlag::InLocator));
+
+        // Discard temporary after expression's effects.
+        self.emit_unary_inst(Opcode::PopN, 0, 1);
+        result_hints
     }
 
     fn emit_empty_stmt(&mut self, _: &str, _: &SyntaxData, _: &AST, hints: EmitterHints) -> EmitterHints {
@@ -1556,25 +1607,26 @@ impl Emitter {
         match node_data {
             SyntaxData::Nil => self.emit_nil_node(src_text, node_data, ast, hints),
             SyntaxData::Literal(_) => self.emit_literal(src_text, node_data, ast, hints),
-            SyntaxData::ObjectExpr { .. } => self.emit_object_expr(src_text, node_data, ast, hints),
-            SyntaxData::ArrayExpr { .. } => self.emit_array_expr(src_text, node_data, ast, hints),
-            SyntaxData::Lambda { .. } => self.emit_lambda(src_text, node_data, ast, hints),
-            SyntaxData::Lhs { .. } => self.emit_lhs(src_text, node_data, ast, hints),
-            SyntaxData::Unary { .. } => self.emit_unary(src_text, node_data, ast, hints),
-            SyntaxData::Binary { .. } => self.emit_binary(src_text, node_data, ast, hints),
-            SyntaxData::Assign { .. } => self.emit_assign(src_text, node_data, ast, hints),
-            SyntaxData::Call { .. } => self.emit_call(src_text, node_data, ast, hints),
-            SyntaxData::FuncDecl { .. } => self.emit_function_decl(src_text, node_data, ast, hints),
-            SyntaxData::Block { .. } => self.emit_block(src_text, node_data, ast, hints),
-            SyntaxData::Vars { .. } => self.emit_vars(src_text, node_data, ast, hints),
-            SyntaxData::Ifs { .. } => self.emit_ifs(src_text, node_data, ast, hints),
-            SyntaxData::While { .. } => self.emit_while(src_text, node_data, ast, hints),
-            // SyntaxData::CLikeFor { .. } => self.emit_c_like_for(src_text, node_data, ast, hints),
-            // SyntaxData::Break { .. } => self.emit_break(src_text, node_data, ast, hints),
-            // SyntaxData::Continue { .. } => self.emit_continue(src_text, node_data, ast, hints),
-            SyntaxData::Return { .. } => self.emit_return(src_text, node_data, ast, hints),
-            SyntaxData::ExprStmt { .. } => self.emit_expr_stmt(src_text, node_data, ast, hints),
-            SyntaxData::EmptyStmt { .. } => self.emit_empty_stmt(src_text, node_data, ast, hints),
+            SyntaxData::ObjectExpr {..} => self.emit_object_expr(src_text, node_data, ast, hints),
+            SyntaxData::ArrayExpr {..} => self.emit_array_expr(src_text, node_data, ast, hints),
+            SyntaxData::Lambda {..} => self.emit_lambda(src_text, node_data, ast, hints),
+            SyntaxData::Lhs {..} => self.emit_lhs(src_text, node_data, ast, hints),
+            SyntaxData::Unary {..} => self.emit_unary(src_text, node_data, ast, hints),
+            SyntaxData::Binary {..} => self.emit_binary(src_text, node_data, ast, hints),
+            SyntaxData::Cond {..} => self.emit_cond(src_text, node_data, ast, hints),
+            SyntaxData::Assign {..} => self.emit_assign(src_text, node_data, ast, hints),
+            SyntaxData::Call {..} => self.emit_call(src_text, node_data, ast, hints),
+            SyntaxData::FuncDecl {..} => self.emit_function_decl(src_text, node_data, ast, hints),
+            SyntaxData::Block {..} => self.emit_block(src_text, node_data, ast, hints),
+            SyntaxData::Vars {..} => self.emit_vars(src_text, node_data, ast, hints),
+            SyntaxData::Ifs {..} => self.emit_ifs(src_text, node_data, ast, hints),
+            SyntaxData::While {..} => self.emit_while(src_text, node_data, ast, hints),
+            // SyntaxData::CLikeFor {..} => self.emit_c_like_for(src_text, node_data, ast, hints),
+            // SyntaxData::Break {..} => self.emit_break(src_text, node_data, ast, hints),
+            // SyntaxData::Continue {..} => self.emit_continue(src_text, node_data, ast, hints),
+            SyntaxData::Return {..} => self.emit_return(src_text, node_data, ast, hints),
+            SyntaxData::ExprStmt {..} => self.emit_expr_stmt(src_text, node_data, ast, hints),
+            SyntaxData::EmptyStmt {..} => self.emit_empty_stmt(src_text, node_data, ast, hints),
             _ => {
                 eprintln!("Syntax at line {} is unsupported.", self.line);
                 hints.without_flag(EmitterFlag::IsVisitOK)

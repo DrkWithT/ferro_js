@@ -72,6 +72,7 @@ pub enum TokenKind {
     Comma,
     Colon,
     Dot,
+    QMark,      // `?` for conditional operator
     Semicolon,
     LeftParen,
     RightParen,
@@ -144,6 +145,7 @@ impl Display for TokenKind {
             Self::Comma => ",",
             Self::Colon => ":",
             Self::Dot => ".",
+            Self::QMark => "?",
             Self::Semicolon => ";",
             Self::LeftParen => "(",
             Self::RightParen => ")",

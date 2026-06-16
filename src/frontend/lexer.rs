@@ -296,6 +296,7 @@ impl<'source_lt> Lexer<'source_lt> {
                 '}' => self.lex_single(TokenKind::RightBrace),
                 '[' => self.lex_single(TokenKind::LeftBracket),
                 ']' => self.lex_single(TokenKind::RightBracket),
+                '?' => self.lex_single(TokenKind::QMark),
                 _ => if self.peeked.is_whitespace() {
                     self.lex_spaces()
                 } else if self.peeked.is_ascii_digit() {

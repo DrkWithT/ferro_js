@@ -22,6 +22,7 @@ pub enum Opcode {
     Discard,
     GetLocal,
     SetLocal,
+    InitVar,
     GetVar,
     SetVar,
     MakeObj,
@@ -85,8 +86,9 @@ pub const OPCODE_NAMES: &[&str] = &[
     "Discard",  // ? Pops an expression's result and puts `undefined`
     "GetLocal", // ? Uses constant offset via immediate arg
     "SetLocal", // ? Uses constant offset via immediate arg
+    "InitVar",  // ? Creates a var binding in the current environment object, but it doesn't leave any temporary.
     "GetVar",
-    "SetVar",
+    "SetVar",   // ? Like InitVar, but leaves a temporary. Handles `=`.
     "MakeObj",
     "GetProp",
     "SetProp",
