@@ -316,12 +316,12 @@ impl Emitter {
 
     fn emit_name(&mut self, lexeme: &str, hints: EmitterHints) -> EmitterHints {
         if hints.get_flag(EmitterFlag::CheckFnIsSimple) {
-            if self.scopes.last().unwrap().symbols.contains_key(lexeme) {
-                // println!("Debug emitter.rs: '{lexeme}' -> local");
-                return hints;
-            } else {
+            if self.resolve_local(lexeme).is_none() {
                 // println!("Debug emitter.rs: '{lexeme}' -> possible capture");
                 return hints.without_flag(EmitterFlag::IsFuncSimple);
+            } else {
+                // println!("Debug emitter.rs: '{lexeme}' -> local");
+                return hints;
             }
         }
 
@@ -335,7 +335,8 @@ impl Emitter {
         let needs_special_updating = hints.get_flag(EmitterFlag::HandleUnarySpecials);
 
         let name_info = if !name_in_locator && !name_in_access && !name_lacks_env {
-            let Some(var_key_info) = self.resolve_global_string(lexeme, true) else { eprintln!("Could not resolve env-var name '{lexeme}' here."); return hints.without_flag(EmitterFlag::IsVisitOK); };
+            // ! FIXME: Test this logic- record (with implicit resolve check) a global key string.
+            let Some(var_key_info) = self.record_global_string(lexeme, true) else { eprintln!("Could not resolve env-var name '{lexeme}' here."); return hints.without_flag(EmitterFlag::IsVisitOK); };
 
             self.emit_unary_inst(Opcode::PushStr, var_key_info.id, 0);
 
@@ -630,11 +631,14 @@ impl Emitter {
         // ? Pre-check during generation via prepass: if there's nested scopes / captured names / closure returns, an environment is needed at runtime for the function (now considered complex).
         let func_is_simple = self.emit_node(src_text, body, ast, pre_param_check_hints).get_flag(EmitterFlag::IsFuncSimple) || hints.get_flag(EmitterFlag::InMethod);
 
+        dbg!(func_is_simple); // ! debug
+
         // ! Delete the mock parameter entries to not confuse the emission's name resolution.
         self.scopes.last_mut().unwrap().symbols.clear();
 
         let started_chunk = Chunk {
             arity: params.len() as u16,
+            icaches: Vec::with_capacity(4),
             ..Default::default()
         };
         self.chunks.push(started_chunk);
@@ -662,8 +666,18 @@ impl Emitter {
             hints.without_flag(EmitterFlag::IsFuncSimple)
         };
 
-        if !self.emit_node(src_text, body, ast, func_specific_hints).check_ok() {
+        println!("func_specific_hints.is_func_simple for lambda body emission... {}", func_specific_hints.get_flag(EmitterFlag::IsFuncSimple)); // ! debug
+
+        if !self.emit_node(
+            src_text,
+            body,
+            ast,
+            func_specific_hints
+                .without_flag(EmitterFlag::CheckFnIsSimple)
+                .without_flag(EmitterFlag::PrepassVars)
+        ).check_ok() {
             self.scopes.pop();
+
             return hints.without_flag(EmitterFlag::IsVisitOK);
         }
 
@@ -951,6 +965,14 @@ impl Emitter {
                 is_ltr: true,
                 opcode: Opcode::Sub
             }),
+            Operator::BitLShift => Some(DirOp {
+                is_ltr: true,
+                opcode: Opcode::BtLs
+            }),
+            Operator::BitRShift => Some(DirOp {
+                is_ltr: true,
+                opcode: Opcode::BtRs
+            }),
             Operator::BitAnd => Some(DirOp {
                 is_ltr: true,
                 opcode: Opcode::BtAnd
@@ -978,6 +1000,14 @@ impl Emitter {
             Operator::LooseUnequal => Some(DirOp {
                 is_ltr: true,
                 opcode: Opcode::LooseNe
+            }),
+            Operator::Lesser => Some(DirOp {
+                is_ltr: true,
+                opcode: Opcode::Lt
+            }),
+            Operator::Greater => Some(DirOp {
+                is_ltr: true,
+                opcode: Opcode::Gt
             }),
             _ => None
         };
@@ -1058,10 +1088,15 @@ impl Emitter {
         let SyntaxData::Call { args, callee } = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
         if hints.get_flag(EmitterFlag::CheckFnIsSimple) {
-            if !self.emit_node(src_text, callee, ast, hints).get_flag(EmitterFlag::IsFuncSimple) {
+            if !self.emit_node(src_text, callee, ast, hints).get_flag(EmitterFlag::IsFuncSimple) || (callee.data.get_emitter_id() == SyntaxId::Lambda && self.scopes.len() > 1) {
                 hints.disable_flag(EmitterFlag::IsFuncSimple);
             }
-            // ! FIXME: check args for capturing names each...
+
+            for arg_expr in args.iter() {
+                if !self.emit_node(src_text, arg_expr, ast, hints).get_flag(EmitterFlag::IsFuncSimple) {
+                    hints.disable_flag(EmitterFlag::IsFuncSimple);
+                }
+            }
 
             return hints;
         }
@@ -1070,7 +1105,7 @@ impl Emitter {
             return hints;
         }
 
-        // ? Evaluate thisArg for callees. Cases below are explained.
+        // ? Evaluate thisArg for callees.
         let callee_emit_hints = if callee.data.get_emitter_id() == SyntaxId::Lhs {
             hints.with_flag(EmitterFlag::HasThisArg)
         } else if self.scopes.len() < 2 {
@@ -1176,7 +1211,11 @@ impl Emitter {
             hints.without_flag(EmitterFlag::IsFuncSimple)
         };
 
-        self.chunks.push(Chunk::default());
+        self.chunks.push(Chunk {
+            arity: params.len() as u16,
+            icaches: Vec::with_capacity(4),
+            ..Default::default()
+        });
 
         for (param_pos, param_tk_pos) in params.iter().enumerate() {
             let param_name = ast.tokens[*param_tk_pos].to_string(src_text);
@@ -1250,7 +1289,18 @@ impl Emitter {
         let SyntaxData::Block {stmts} = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
         if hints.get_flag(EmitterFlag::CheckFnIsSimple) {
-            let not_all_stmts_simple = !stmts.iter().all(|temp_stmt| self.emit_node(src_text, temp_stmt, ast, hints).get_flag(EmitterFlag::IsFuncSimple) && temp_stmt.data.get_emitter_id() != SyntaxId::FuncDecl );
+            let mut not_all_stmts_simple = false;
+
+            for simplicity_check_stmt in stmts.iter() {
+                if matches!(simplicity_check_stmt.data.get_emitter_id(), SyntaxId::FuncDecl | SyntaxId::Lambda) {
+                    not_all_stmts_simple = true;
+                    break;
+                    // ! Below, mark prepass flag under simplicity check since we could be prepassing a lambda with nested lambdas. Lambda emission doesn't prematurely stop visitation upon simple-checks but prepass-vars ON.
+                } else if !self.emit_node(src_text, simplicity_check_stmt, ast, hints.with_flag(EmitterFlag::PrepassVars)).get_flag(EmitterFlag::IsFuncSimple) {
+                    not_all_stmts_simple = true;
+                    break;
+                }
+            }
 
             if not_all_stmts_simple {
                 hints.disable_flag(EmitterFlag::IsFuncSimple);

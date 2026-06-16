@@ -482,8 +482,35 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         Ok(lhs)
     }
 
-    fn parse_compare(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
+    fn parse_bit_shift(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
         let mut lhs = self.parse_term()?;
+        
+        while !self.at_eof() {
+            let bit_shift_op = match self.tokens[self.pos].kind {
+                TokenKind::OperatorBShiftLeft => Operator::BitLShift,
+                TokenKind::OperatorBShiftRight => Operator::BitRShift,
+                _ => Operator::Noop,
+            };
+
+            if bit_shift_op == Operator::Noop {
+                break;
+            }
+
+            self.consume();
+
+            let pre_rhs_pos = self.pos;
+            lhs = Box::new(SyntaxNode {
+                data: SyntaxData::Binary { l: lhs, r: self.parse_term()?, op: bit_shift_op },
+                first_tk: pre_rhs_pos,
+                end_tk: self.pos
+            });
+        }
+
+        Ok(lhs)
+    }
+
+    fn parse_compare(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
+        let mut lhs = self.parse_bit_shift()?;
 
         while !self.at_eof() {
             let compare_op = match self.tokens[self.pos].kind {
@@ -501,7 +528,7 @@ impl<'external_content_lt> Parser<'external_content_lt> {
 
             let pre_rhs_pos = self.pos;
             lhs = Box::new(SyntaxNode {
-                data: SyntaxData::Binary { l: lhs, r: self.parse_term()?, op: compare_op },
+                data: SyntaxData::Binary { l: lhs, r: self.parse_bit_shift()?, op: compare_op },
                 first_tk: pre_rhs_pos,
                 end_tk: self.pos,
             });

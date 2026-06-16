@@ -29,6 +29,8 @@ pub enum Operator {
     Greater,
     GreaterOrEqual,
     BitFlip,
+    BitLShift,
+    BitRShift,
     BitAnd,
     BitXor,
     BitOr,
