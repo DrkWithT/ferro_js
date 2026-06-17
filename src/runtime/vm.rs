@@ -1,7 +1,8 @@
+use crate::runtime::opaque::JSInternalTag;
 use crate::runtime::values::{JSVTag, JSValue};
 use crate::runtime::objects::{DUD_POOL_ID};
 use crate::runtime::property::AddPropHint;
-use crate::runtime::code::{Opcode};
+use crate::runtime::code::{Opcode, JSGlobalConstID};
 use crate::runtime::ctx::{ CallFrame, EvalStatus, JSContext};
 
 
@@ -424,6 +425,32 @@ unsafe fn op_make_closure(context: &mut JSContext, stack: *mut JSValue) {
         // println!("DEBUG vm.rs, op_make_closure:\ncallable_oid = {callable_oid}");
 
         *stack.add(context.sp as usize) = context.create_closure_obj(callable_oid);
+        context.ip = context.ip.add(1);
+    }
+}
+
+unsafe fn op_query_type(context: &mut JSContext, stack: *mut JSValue) {
+    unsafe {
+        let temp_v = stack.add(context.sp as usize).as_ref_unchecked();
+
+        let type_name_v = match temp_v {
+            JSValue::Undefined => context.global_consts[JSGlobalConstID::TypenameUndefined as usize],
+            JSValue::Null => context.global_consts[JSGlobalConstID::TypenameObject as usize],
+            JSValue::Boolean(_) => context.global_consts[JSGlobalConstID::TypenameBoolean as usize],
+            JSValue::Number(_) => context.global_consts[JSGlobalConstID::TypenameNumber as usize],
+            JSValue::StringId(_) => context.global_consts[JSGlobalConstID::TypenameString as usize],
+            JSValue::ObjectId(oid) => if let Some(obj_ptr) = context.heap.get_item(*oid) {
+                if obj_ptr.opaque.has_discriminant(JSInternalTag::Empty) {
+                    context.global_consts[JSGlobalConstID::TypenameObject as usize]
+                } else {
+                    context.global_consts[JSGlobalConstID::TypenameFunction as usize]
+                }
+            } else {
+                context.global_consts[JSGlobalConstID::TypenameUndefined as usize]
+            }
+        };
+
+        *stack.add(context.sp as usize) = type_name_v;
         context.ip = context.ip.add(1);
     }
 }
@@ -900,7 +927,7 @@ pub fn run_vm(context: &mut JSContext) -> EvalStatus {
                 Opcode::MakeObj => op_make_obj(context, stack_base_ptr),
                 Opcode::GetProp => op_get_prop(context, stack_base_ptr),
                 Opcode::SetProp => op_set_prop(context, stack_base_ptr),
-                Opcode::DelProp => op_del_prop(context, stack_base_ptr),
+                Opcode::Delete => op_del_prop(context, stack_base_ptr),
                 Opcode::GetProto => op_get_proto(context, stack_base_ptr),
                 Opcode::SetProto => op_set_proto(context, stack_base_ptr),
                 Opcode::IncLocal => op_inc_local(context, stack_base_ptr),
@@ -908,6 +935,7 @@ pub fn run_vm(context: &mut JSContext) -> EvalStatus {
                 Opcode::IncProp => op_inc_prop(context, stack_base_ptr),
                 Opcode::DecProp => op_dec_prop(context, stack_base_ptr),
                 Opcode::MakeClosure => op_make_closure(context, stack_base_ptr),
+                Opcode::GetType => op_query_type(context, stack_base_ptr),
                 Opcode::ForceBool => op_force_bool(context, stack_base_ptr),
                 Opcode::ForceNum => op_force_num(context, stack_base_ptr),
                 Opcode::NegBool => op_neg_bool(context, stack_base_ptr),
@@ -927,8 +955,8 @@ pub fn run_vm(context: &mut JSContext) -> EvalStatus {
                 Opcode::StrictNe => op_strict_ne(context, stack_base_ptr),
                 Opcode::LooseEq => op_loose_eq(context, stack_base_ptr),
                 Opcode::LooseNe => op_loose_ne(context, stack_base_ptr),
-                Opcode::Lt => op_lt(context, stack_base_ptr), // todo
-                Opcode::Lte => op_lte(context, stack_base_ptr), // todo
+                Opcode::Lt => op_lt(context, stack_base_ptr),
+                Opcode::Lte => op_lte(context, stack_base_ptr),
                 Opcode::Gt => op_gt(context, stack_base_ptr),
                 Opcode::Gte => op_gte(context, stack_base_ptr),
                 Opcode::JumpIf => op_jump_if(context, stack_base_ptr),

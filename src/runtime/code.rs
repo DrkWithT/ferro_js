@@ -28,7 +28,7 @@ pub enum Opcode {
     MakeObj,
     GetProp,
     SetProp,
-    DelProp,
+    Delete,
     GetProto,
     SetProto,
     IncLocal,
@@ -36,6 +36,7 @@ pub enum Opcode {
     IncProp,
     DecProp,
     MakeClosure,
+    GetType,
     ForceBool,
     ForceNum,
     NegBool,
@@ -92,7 +93,7 @@ pub const OPCODE_NAMES: &[&str] = &[
     "MakeObj",
     "GetProp",
     "SetProp",
-    "DelProp",
+    "Delete",   // ? Tries to delete a property. Flag 0 => noop-true, 1 => loose mode, 2 => strict mode
     "GetProto",
     "SetProto", // ? Uses a "builtin" flag: If 1, an intrinsic prototype via ID is put. Otherwise, the stack's top-most JSValue is used.
     "IncLocal",
@@ -100,6 +101,7 @@ pub const OPCODE_NAMES: &[&str] = &[
     "IncProp",
     "DecProp",
     "MakeClosure",
+    "GetType",  // ? Handles `typeof <target>` operations.
     "ForceBool",
     "ForceNum",
     "NegBool",
@@ -294,6 +296,23 @@ pub enum JSFuncFlag {
     IsStrict = (1 << 3),
 }
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum JSGlobalConstID {
+    TypenameUndefined,
+    TypenameBoolean,
+    TypenameNumber,
+    TypenameString,
+    TypenameObject,
+    TypenameFunction,
+    Last,
+}
+
+pub const JS_GLOBAL_CONST_N: usize = JSGlobalConstID::Last as usize;
+pub const JS_DELETE_FLAG_NOOP: u16 = 0;
+pub const JS_DELETE_FLAG_LOOSE: u16 = 1;
+pub const JS_DELETE_FLAG_STRICT: u16 = 2;
+
 #[derive(Debug, Default, Clone)]
 pub struct Chunk {
     pub icaches: Vec<InlineCache>,
@@ -311,6 +330,7 @@ pub struct Program {
     pub spool: ItemPool<JSStrPtr, JS_STRING_COST>,
     /// Bytecode of JS code Boxes. This is for pointer stability so each exotic object can have a mutable-view ptr to the same chunk address.
     pub chunks: Vec<Box<Chunk>>,
+    pub global_consts: Vec<JSValue>,
     /// Saved script file-path
     pub name: String,
 }

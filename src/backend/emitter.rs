@@ -9,8 +9,9 @@ use crate::frontend::{
 
 use crate::runtime::opaque::JSOpaque;
 use crate::runtime::objects::{ExoticObject};
+#[allow(unused)]
 use crate::runtime::{
-    code::{InlineCache, JSFuncFlag, Opcode, Instruction, Chunk, Program},
+    code::{InlineCache, JSFuncFlag, Opcode, JS_DELETE_FLAG_NOOP, JS_DELETE_FLAG_LOOSE, JS_DELETE_FLAG_STRICT, Instruction, JSGlobalConstID, JS_GLOBAL_CONST_N, Chunk, Program},
     values::{JSValue},
     objects::{JSObjPtr, JSStrPtr, JS_OBJECT_COST, JS_STRING_COST, ItemPool, /*ExoticObject*/},
     // funcs::{FuncBody, JSFunction},
@@ -130,6 +131,7 @@ pub struct Emitter {
     pub chunk_buf: Vec<Box<Chunk>>,
     pub chunks: Vec<Chunk>,
     pub scopes: Vec<SymbolScope>,
+    pub gconsts: Vec<JSValue>,
     pub cached_info: Option<SymbolInfo>,
     pub local_reserve_n: i32,
     pub line: u16,
@@ -144,12 +146,29 @@ impl Emitter {
             chunk_buf: vec![],
             chunks: vec![Chunk::default()],
             scopes: vec![SymbolScope::default()],
+            gconsts: {
+                let mut global_consts = Vec::<JSValue>::with_capacity(JS_GLOBAL_CONST_N);
+
+                global_consts.resize(JS_GLOBAL_CONST_N, JSValue::Undefined);
+                global_consts
+            },
             cached_info: None,
             local_reserve_n: 0,
             line: 1,
             chunk_n: 0
         }
     }
+
+    pub fn set_global_constant_of_str(&mut self, id: JSGlobalConstID, s: &'static str) -> bool {
+        if let Some(sid) = self.record_global_string(s, false) {   
+            self.gconsts[id as usize] = JSValue::StringId(sid.id);
+            return true;
+        }
+
+        false
+    }
+
+    // pub fn set_global_constant_of_obj(&mut self, id: usize, symbol: &'static str, o: JSObjPtr) -> bool { false } // todo: use for setting up JS intrinics...
 
     fn put_ic_of_inst(&mut self, inst_pos: i32) {
         let next_ic_id = self.chunks.last().expect("Expected available chunk at emitter.rs ~ put_ic_of_inst.").icaches.len() as u16;
@@ -255,7 +274,7 @@ impl Emitter {
         if let Some(pre_info) = self.resolve_global_string(s, is_key) {
             return Some(pre_info);
         }
-        
+
         let real_string_symbol = if is_key { format!("[[{s}]]") } else { format!("'{}'", s.to_owned()) };
         let real_string = s.to_owned();
         let real_string: JSStrPtr = Some(Box::new(real_string));
@@ -801,6 +820,24 @@ impl Emitter {
         hints.with_flag(EmitterFlag::InAccess)
     }
 
+    fn emit_deletion(&mut self, src_text: &str, node: &SyntaxNode, ast: &AST, hints: EmitterHints) -> EmitterHints {
+        let inner_expr_flags = self.emit_node(src_text, node, ast, hints);
+
+        if !inner_expr_flags.check_ok() {
+            return inner_expr_flags;
+        }
+
+        let opcode_flags: u16 = if inner_expr_flags.get_flag(EmitterFlag::InAccess) {
+            JS_DELETE_FLAG_LOOSE
+        } else {
+            JS_DELETE_FLAG_NOOP
+        };
+
+        self.emit_unary_inst(Opcode::Delete, 0, opcode_flags);
+
+        hints.without_flag(InLocator)
+    }
+
     fn emit_unary(&mut self, src_text: &str, node: &SyntaxData, ast: &AST, mut hints: EmitterHints) -> EmitterHints {
         let SyntaxData::Unary { inner, op, prefix } = node else { return hints.without_flag(EmitterFlag::IsVisitOK); };
 
@@ -816,8 +853,7 @@ impl Emitter {
             return hints;
         }
 
-        #[allow(unused)]
-        let (mut temp_opcode, op_is_prefix) = match op {
+        let (temp_opcode, _op_is_prefix) = match op {
             Operator::NegBool => (
                 Some(Opcode::NegBool),
                 true
@@ -856,19 +892,23 @@ impl Emitter {
             ),
             Operator::BitFlip => (Some(Opcode::BtFlip), true),
             Operator::Delete => (
-                // if matches!(inner.data.get_emitter_id(), SyntaxId::Literal | SyntaxId::Lhs) {
-                //     Some(Opcode::DelProp)
-                // } else { None }, // todo
-                None,
+                Some(Opcode::Delete),
                 true
             ),
-            Operator::TypeOf => (None, true), // todo
+            Operator::TypeOf => (
+                Some(Opcode::GetType),
+                true
+            ),
             Operator::Void => (Some(Opcode::Discard), true),
             _ => (None, true)
         };
 
         if temp_opcode.is_none() {
             return hints.without_flag(EmitterFlag::IsVisitOK);
+        }
+
+        if *op == Operator::Delete {
+            return self.emit_deletion(src_text, inner, ast, hints.with_flag(EmitterFlag::InLocator));
         }
 
         let handle_new_unary = *op == Operator::New;
@@ -1703,6 +1743,7 @@ impl Emitter {
             heap: std::mem::take(&mut self.heap),
             spool: std::mem::take(&mut self.spool),
             chunks: std::mem::take(&mut self.chunk_buf),
+            global_consts: std::mem::take(&mut self.gconsts),
             name: name.clone(),
         })
     }

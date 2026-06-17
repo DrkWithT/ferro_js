@@ -89,6 +89,7 @@ pub struct JSContext {
     /// Holds pre-allocated buffer of JSValues.
     pub stack: Vec<JSValue>,
     pub top_code: Vec<Box<Chunk>>,
+    pub global_consts: Vec<JSValue>,
     pub ip: *const Instruction,
     pub icp: *mut InlineCache,
     pub cvp: *const JSValue,
@@ -161,6 +162,7 @@ impl JSContext {
                 temp_stack
             },
             top_code: program.chunks,
+            global_consts: std::mem::take(&mut program.global_consts),
             ip: start_ip,
             icp: start_icp,
             cvp: start_cvp,
