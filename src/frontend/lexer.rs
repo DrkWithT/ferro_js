@@ -128,14 +128,15 @@ impl<'source_lt> Lexer<'source_lt> {
     }
 
     fn lex_block_comment(&mut self) -> Token {
-        self.consume(); // skip '*' of leading '*/'
+        self.consume(); // skip '*' of leading '/*'
 
         let token_begin = self.pos;
-        let token_last = self.pos;
+        let mut token_last = self.pos;
         let token_line = self.line;
 
         while self.peeked != '\0' {
             self.consume();
+            token_last = self.pos;
 
             if self.previous == '*' && self.peeked == '/' {
                 break;
@@ -260,6 +261,73 @@ impl<'source_lt> Lexer<'source_lt> {
         }
     }
 
+    fn lex_escaped_char(&mut self) -> bool {
+        self.consume(); // skip '\'
+
+        let peek_0 = self.peeked;
+
+        if matches!(peek_0, 't' | 'r' | 'n' | '\\' | '\'' | '\"') {
+            self.consume();
+            return true;
+        } else if peek_0 == 'x' {
+            self.consume();
+        } else {
+            return false;
+        }
+
+        let peek_hex_1 = self.peeked;
+        if !peek_hex_1.is_ascii_hexdigit() {
+            return false;
+        }
+        self.consume();
+
+        let peek_hex_2 = self.peeked;
+        if !peek_hex_2.is_ascii_hexdigit() {
+            return false;
+        }
+        self.consume();
+
+        true
+    }
+
+    fn lex_string(&mut self, delim: char) -> Token {
+        self.consume(); // ? Eat opening quote delimiter...
+
+        let token_begin = self.pos;
+        let mut token_last = self.pos;
+        let token_line = self.line;
+        let mut validated = true;
+        let mut escaped = false;
+
+        while self.peeked != '\0' {
+            if self.previous != '\\' && self.peeked == delim {
+                self.consume(); // ? Eat closing quote...
+                break;
+            } else if self.peeked == '\\' {
+                if !self.lex_escaped_char() {
+                    validated = false;
+                    break;
+                }
+                escaped = true;
+            } else if !matches!(self.peeked, '\r' | '\n') {
+                self.consume();
+            } else {
+                token_last = self.pos;
+                validated = false;
+                break;
+            }
+
+            token_last = self.pos;
+        }
+
+        Token {
+            begin: token_begin,
+            end: token_last,
+            line: token_line,
+            kind: if !validated { TokenKind::Unknown } else if escaped { TokenKind::LiteralEscapedString } else { TokenKind::LiteralString }
+        }
+    }
+
     fn lex_word(&mut self, source: &'source_lt str) -> Token {
         let mut temp_token = self.lex_while(|c| {c.is_alphanumeric()});
 
@@ -297,6 +365,8 @@ impl<'source_lt> Lexer<'source_lt> {
                 '[' => self.lex_single(TokenKind::LeftBracket),
                 ']' => self.lex_single(TokenKind::RightBracket),
                 '?' => self.lex_single(TokenKind::QMark),
+                '\'' => self.lex_string('\''),
+                '\"' => self.lex_string('\"'),
                 _ => if self.peeked.is_whitespace() {
                     self.lex_spaces()
                 } else if self.peeked.is_ascii_digit() {

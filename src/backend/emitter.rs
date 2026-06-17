@@ -256,7 +256,7 @@ impl Emitter {
             return Some(pre_info);
         }
         
-        let real_string_symbol = if is_key { format!("[[{s}]]") } else { s.to_owned() };
+        let real_string_symbol = if is_key { format!("[[{s}]]") } else { format!("'{}'", s.to_owned()) };
         let real_string = s.to_owned();
         let real_string: JSStrPtr = Some(Box::new(real_string));
 
@@ -268,6 +268,32 @@ impl Emitter {
 
             self.scopes.first_mut().expect("Expected global scope to be tracked in Emitter::record_global_string()!").symbols.insert(real_string_symbol, temp_info);
 
+            return Some(temp_info);
+        }
+
+        None
+    }
+
+    fn record_escaped_string(&mut self, tk: Token, is_key: bool, source: &str) -> Option<SymbolInfo> {
+        let lexeme = tk.to_str(source);
+
+        if let Some(pre_info) = self.resolve_global_string(lexeme, is_key) {
+            return Some(pre_info);
+        }
+
+        let real_string_symbol = if is_key { format!("[[{lexeme}]]") } else { lexeme.to_owned() };
+        let real_string_cell: JSStrPtr = Some(Box::new(
+            tk.to_unescaped_string(source)
+        ));
+
+        if let Some(sid) = self.spool.add_item(real_string_cell) {   
+            let temp_info = SymbolInfo {
+                id: sid,
+                tag: if is_key {SymbolTag::KeyStr} else {SymbolTag::GlobalStr},
+            };
+
+            self.scopes.first_mut().expect("Expected global scope to be tracked in Emitter::record_escaped_string()!").symbols.insert(real_string_symbol, temp_info);
+            
             return Some(temp_info);
         }
 
@@ -487,6 +513,20 @@ impl Emitter {
             TokenKind::LiteralString => {
                 if let Some(gs_info) = self.record_global_string(
                     literal_lexeme, false
+                ) {
+                    if let Some(gsc_info) = self.record_constant(literal_lexeme, JSValue::StringId(gs_info.id)) {
+                        self.emit_unary_inst(Opcode::PushConst, gsc_info.id, 0);
+                        hints
+                    } else {
+                        hints.without_flag(EmitterFlag::IsVisitOK)
+                    }
+                } else {
+                    hints.without_flag(EmitterFlag::IsVisitOK)
+                }
+            },
+            TokenKind::LiteralEscapedString => {
+                if let Some(gs_info) = self.record_escaped_string(
+                    ast.tokens[*lt_tk_pos].clone(), false, source
                 ) {
                     if let Some(gsc_info) = self.record_constant(literal_lexeme, JSValue::StringId(gs_info.id)) {
                         self.emit_unary_inst(Opcode::PushConst, gsc_info.id, 0);

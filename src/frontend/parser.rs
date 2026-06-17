@@ -82,7 +82,7 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         let tk_pos = self.pos;
         let current = &self.tokens[self.pos];
 
-        if matches!(current.kind, TokenKind::LiteralUndefined | TokenKind::LiteralNull | TokenKind::LiteralNaN | TokenKind::LiteralTrue | TokenKind::LiteralFalse | TokenKind::LiteralDecInt | TokenKind::LiteralHexInt | TokenKind::LiteralBinInt | TokenKind::LiteralOctInt | TokenKind::LiteralFloat | TokenKind::LiteralString | TokenKind::KeywordThis | TokenKind::Identifier) {
+        if matches!(current.kind, TokenKind::LiteralUndefined | TokenKind::LiteralNull | TokenKind::LiteralNaN | TokenKind::LiteralTrue | TokenKind::LiteralFalse | TokenKind::LiteralDecInt | TokenKind::LiteralHexInt | TokenKind::LiteralBinInt | TokenKind::LiteralOctInt | TokenKind::LiteralFloat | TokenKind::LiteralString | TokenKind::LiteralEscapedString | TokenKind::KeywordThis | TokenKind::Identifier) {
             self.consume();
             return Ok(Box::new(SyntaxNode {
                 data: SyntaxData::Literal(tk_pos),

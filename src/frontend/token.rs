@@ -69,6 +69,7 @@ pub enum TokenKind {
     LiteralOctInt,
     LiteralFloat,
     LiteralString,
+    LiteralEscapedString,
     Comma,
     Colon,
     Dot,
@@ -142,6 +143,7 @@ impl Display for TokenKind {
             Self::LiteralOctInt => "(literal-oct-int)",
             Self::LiteralFloat => "(number-float)",
             Self::LiteralString => "(literal-string)",
+            Self::LiteralEscapedString => "(literal-escaped-string)",
             Self::Comma => ",",
             Self::Colon => ":",
             Self::Dot => ".",
@@ -184,5 +186,91 @@ impl Token {
         let tmp = &source[self.begin as usize .. self.end as usize];
 
         tmp.to_owned()
+    }
+
+    pub fn to_unescaped_string(&self, source: &str) -> String {
+        const HEX_DIGIT_0: u8 = '0'.to_ascii_lowercase() as u8;
+        const HEX_LTR_0: u8 = 'A'.to_ascii_lowercase() as u8;
+
+        if self.kind != TokenKind::LiteralEscapedString {
+            return self.to_str(source).to_owned();
+        }
+
+        let lexeme = &source[self.begin as usize .. self.end as usize];
+
+        #[repr(u8)]
+        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+        enum DEscState {
+            Check,
+            Regular,
+            Char1,
+            Char2,
+            Ascii,
+            Done,
+        }
+
+        let mut state = DEscState::Check;
+        let chars = lexeme.chars().collect::<Vec<char>>();
+        let mut s = String::default();
+        let mut spos: usize = 0;
+        let mut hex_low = 0u8;
+        let mut hex_high = 0u8;
+
+        while state != DEscState::Done {
+            let c = *chars.get(spos).unwrap_or(&'\0');
+
+            state = match state {
+                DEscState::Check => {
+                    if c == '\\' { spos += 1; DEscState::Char1 } else if c != '\0' { DEscState::Regular } else { DEscState::Done }
+                },
+                DEscState::Regular => {
+                    s.push(c);
+                    spos += 1;
+                    DEscState::Check
+                },
+                DEscState::Char1 => {
+                    if matches!(c, 't' | 'r' | 'n' | '\\' | '\'' | '\"') {
+                        s.push(c);
+                        spos += 1;
+                        DEscState::Check
+                    } else if c == 'x' {
+                        spos += 1;
+                        DEscState::Char1
+                    } else if c.is_ascii_digit() {
+                        hex_high = c as u8 - HEX_DIGIT_0;
+                        spos += 1;
+                        DEscState::Char2
+                    } else if c.is_ascii_hexdigit() {
+                        hex_high = c.to_ascii_lowercase() as u8 - HEX_LTR_0;
+                        spos += 1;
+                        DEscState::Char2
+                    } else {
+                        spos += 1;
+                        DEscState::Check
+                    }
+                },
+                DEscState::Char2 => {
+                    if c.is_ascii_digit() {
+                        hex_low = c.to_ascii_lowercase() as u8 - HEX_DIGIT_0;
+                        spos += 1;
+                        DEscState::Ascii
+                    } else if c.is_ascii_hexdigit() {
+                        hex_low = c.to_ascii_lowercase() as u8 - HEX_LTR_0;
+                        spos += 1;
+                        DEscState::Ascii
+                    } else {
+                        spos += 1;
+                        DEscState::Check
+                    }
+                },
+                DEscState::Ascii => {
+                    s.push((hex_high * 16 + hex_low) as char);
+                    DEscState::Check
+                },
+                _ => state,
+            };
+        }
+
+        s
     }
 }
