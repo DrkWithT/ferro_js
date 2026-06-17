@@ -362,7 +362,7 @@ impl Emitter {
 
     fn emit_name(&mut self, lexeme: &str, hints: EmitterHints) -> EmitterHints {
         if hints.get_flag(EmitterFlag::CheckFnIsSimple) {
-            if self.resolve_local(lexeme).is_none() {
+            if !self.scopes.last().unwrap().symbols.contains_key(lexeme) {
                 // println!("Debug emitter.rs: '{lexeme}' -> possible capture");
                 return hints.without_flag(EmitterFlag::IsFuncSimple);
             } else {

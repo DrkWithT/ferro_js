@@ -24,10 +24,10 @@ impl<'source_lt> Lexer<'source_lt> {
             specials: HashMap::default(),
             iter: source.char_indices(),
             pos: 0,
-            end: source.len() as u32 - 1u32,
+            end: source.len() as u32,
             line: 1,
             previous: DUD_SYMBOL,
-            peeked: DUD_SYMBOL
+            peeked: source.chars().nth(0).expect("Expected non-empty source.")
         }
     }
 
@@ -42,10 +42,10 @@ impl<'source_lt> Lexer<'source_lt> {
     fn advance(&mut self) -> char {
         if let Some((pos, symbol)) = self.iter.next() {
             self.pos = pos as u32;
-
             return symbol;
         }
 
+        self.pos = self.end;
         utils::DUD_SYMBOL
     }
 
@@ -238,6 +238,7 @@ impl<'source_lt> Lexer<'source_lt> {
                 } else {
                     has_dot = true;
                     self.consume();
+                    token_last = self.pos;
                 }
             } else {
                 break;
@@ -349,8 +350,6 @@ impl<'source_lt> Lexer<'source_lt> {
     pub fn lex_all(&mut self, source: &'source_lt str) -> Vec<Token> {
         let mut tokens = Vec::<Token>::default();
 
-        self.consume();
-
         while !self.at_eos() {
             let temp = match self.peeked {
                 '/' => self.lex_slashed(),
@@ -386,6 +385,8 @@ impl<'source_lt> Lexer<'source_lt> {
 
             tokens.push(temp);
         }
+
+        tokens.push(Token::eof(self.pos));
 
         tokens
     }
