@@ -5,11 +5,11 @@ var foo = void(1 + 1 + 1);
 var ok = 0;
 
 if (test === undefined) {
-    ok = ok + 1;
+    ok++;
 }
 
 if (foo === undefined) {
-    ok = ok + 1;
+    ok++;
 }
 
-ok === 2;
+return ok === 2;

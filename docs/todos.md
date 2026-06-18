@@ -5,9 +5,9 @@
  - Support simple functions.
  - Support simple objects with property semantics: data vs. accessor.
  - Implement closures.
-   - Add RET_CLOSURE support.
- - Support assignment op results, conditional ternary op.
- - Add `typeof`, `delete`
+ - Support relational ops, bitshifts, conditional ternary op, assignment op, comma.
+ - Support primitive strings.
+ - Add `typeof`: **WIP**
    - TypeOf results:
       - Undefined: `"undefined"`
       - Null: `"object"`
@@ -17,11 +17,13 @@
       - ~~Symbol: `"symbol"`~~
       - non-Function Object: `"object"`
       - functions: `"function"`
-   - Delete result:
-      - The operation succeeds with `true` when property is non-accessor AND configurable.
-      - NOTE: writable + configurable + enumerable are 3 important flags per property. 
- - Support strings.
  - Refactor codebase into modular, Dep. Injected driver.
+ - Add `delete`:
+      - The operation succeeds with `true` when property is non-accessor AND configurable AND not a direct name. Otherwise, a `TypeError` occurs in `'use strict'` mode when `false`. Non properties return `true` vacuously.
+      - NOTE: writable + configurable + enumerable are 3 important flags per property to check at runtime.
+         - Set: Not `configurable` and `writable` names will "delete" with `false` in loose mode.
+         - Delete: Not `configurable` and `accessor` based names will "delete" with `false`.
+         - Maybe Shapes should store this metadata.
 
 #### v0.2.0
  - Support intrinsics for future:

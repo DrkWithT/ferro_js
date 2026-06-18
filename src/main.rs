@@ -9,11 +9,9 @@ use crate::{
         ast::AST, lexer::Lexer, parser::Parser, token::TokenKind
     },
     runtime::{
-        code::dump_bytecode, ctx::{
-            JSContext, EvalStatus
-        },
-        shape::DEFAULT_SHAPE_POPULATION,
-        vm::{
+        code::{JSGlobalConstID, dump_bytecode}, ctx::{
+            EvalStatus, JSContext
+        }, shape::DEFAULT_SHAPE_POPULATION, values::JSValue, vm::{
             DEFAULT_JS_RECUR_LIMIT, DEFAULT_JS_STACK_SIZE, run_vm
         }
     }
@@ -121,6 +119,13 @@ fn main() -> ExitCode {
 
     let mut bc_emitter = Emitter::new(64, 256);
 
+    bc_emitter.set_global_constant_of_str(JSGlobalConstID::TypenameUndefined, "undefined");
+    bc_emitter.set_global_constant_of_str(JSGlobalConstID::TypenameBoolean, "boolean");
+    bc_emitter.set_global_constant_of_str(JSGlobalConstID::TypenameNumber, "number");
+    bc_emitter.set_global_constant_of_str(JSGlobalConstID::TypenameString, "string");
+    bc_emitter.set_global_constant_of_str(JSGlobalConstID::TypenameObject, "object");
+    bc_emitter.set_global_constant_of_str(JSGlobalConstID::TypenameFunction, "function");
+
     let program = bc_emitter.emit_code(&ast);
 
     if program.is_none() {
@@ -137,14 +142,13 @@ fn main() -> ExitCode {
     let mut vm_state = JSContext::new(DEFAULT_SHAPE_POPULATION, DEFAULT_JS_STACK_SIZE, DEFAULT_JS_RECUR_LIMIT, program);
 
     let vm_status = run_vm(&mut vm_state);
+    let vm_result = vm_state.stack[0];
 
-    println!("{}", vm_state.stack[0]);
+    println!("{vm_result}");
 
-    println!("Finish status: {vm_status}");
-
-    if vm_status == EvalStatus::Ok {
-        ExitCode::SUCCESS
+    if let JSValue::Boolean(b) = vm_result && vm_status == EvalStatus::Ok {
+        if b { ExitCode::SUCCESS } else { ExitCode::FAILURE }
     } else {
-        ExitCode::FAILURE
+        ExitCode::SUCCESS
     }
 }

@@ -29,6 +29,8 @@ pub enum Operator {
     Greater,
     GreaterOrEqual,
     BitFlip,
+    BitLShift,
+    BitRShift,
     BitAnd,
     BitXor,
     BitOr,
@@ -48,6 +50,7 @@ pub enum SyntaxId {
     Lhs,
     Unary,
     Binary,
+    Cond,
     Assign,
     Call,
     FuncDecl,
@@ -113,6 +116,11 @@ pub enum SyntaxData {
         dest: Box<SyntaxNode>,
         src: Box<SyntaxNode>,
     },
+    Cond {
+        check: Box<SyntaxNode>,
+        l: Box<SyntaxNode>,
+        r: Box<SyntaxNode>
+    },
     Call {
         args: Vec<Box<SyntaxNode>>,
         callee: Box<SyntaxNode>,
@@ -167,6 +175,7 @@ impl SyntaxData {
             Self::Unary {..} => SyntaxId::Unary,
             Self::Binary {..} => SyntaxId::Binary,
             Self::Assign {..} => SyntaxId::Assign,
+            Self::Cond {..} => SyntaxId::Cond,
             Self::Call {..} => SyntaxId::Call,
             Self::FuncDecl {..} => SyntaxId::FuncDecl,
             Self::Block {..} => SyntaxId::Block,

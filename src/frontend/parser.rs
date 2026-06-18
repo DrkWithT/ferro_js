@@ -82,7 +82,7 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         let tk_pos = self.pos;
         let current = &self.tokens[self.pos];
 
-        if matches!(current.kind, TokenKind::LiteralUndefined | TokenKind::LiteralNull | TokenKind::LiteralNaN | TokenKind::LiteralTrue | TokenKind::LiteralFalse | TokenKind::LiteralDecInt | TokenKind::LiteralHexInt | TokenKind::LiteralBinInt | TokenKind::LiteralOctInt | TokenKind::LiteralFloat | TokenKind::LiteralString | TokenKind::KeywordThis | TokenKind::Identifier) {
+        if matches!(current.kind, TokenKind::LiteralUndefined | TokenKind::LiteralNull | TokenKind::LiteralNaN | TokenKind::LiteralTrue | TokenKind::LiteralFalse | TokenKind::LiteralDecInt | TokenKind::LiteralHexInt | TokenKind::LiteralBinInt | TokenKind::LiteralOctInt | TokenKind::LiteralFloat | TokenKind::LiteralString | TokenKind::LiteralEscapedString | TokenKind::KeywordThis | TokenKind::Identifier) {
             self.consume();
             return Ok(Box::new(SyntaxNode {
                 data: SyntaxData::Literal(tk_pos),
@@ -96,7 +96,7 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         } else if current.kind == TokenKind::LeftParen {
             self.consume();
 
-            let wrapped_expr = self.parse_or()?;
+            let wrapped_expr = self.parse_assign()?;
 
             let rparen_tk = &self.tokens[self.pos];
             CONSUME_OF!(self.consume(), ParseErr { culprit: rparen_tk.clone(), msg: "Expected ')' ending wrapped expr.", line: rparen_tk.line }, rparen_tk.clone(), TokenKind::RightParen);
@@ -482,8 +482,35 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         Ok(lhs)
     }
 
-    fn parse_compare(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
+    fn parse_bit_shift(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
         let mut lhs = self.parse_term()?;
+        
+        while !self.at_eof() {
+            let bit_shift_op = match self.tokens[self.pos].kind {
+                TokenKind::OperatorBShiftLeft => Operator::BitLShift,
+                TokenKind::OperatorBShiftRight => Operator::BitRShift,
+                _ => Operator::Noop,
+            };
+
+            if bit_shift_op == Operator::Noop {
+                break;
+            }
+
+            self.consume();
+
+            let pre_rhs_pos = self.pos;
+            lhs = Box::new(SyntaxNode {
+                data: SyntaxData::Binary { l: lhs, r: self.parse_term()?, op: bit_shift_op },
+                first_tk: pre_rhs_pos,
+                end_tk: self.pos
+            });
+        }
+
+        Ok(lhs)
+    }
+
+    fn parse_compare(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
+        let mut lhs = self.parse_bit_shift()?;
 
         while !self.at_eof() {
             let compare_op = match self.tokens[self.pos].kind {
@@ -501,7 +528,7 @@ impl<'external_content_lt> Parser<'external_content_lt> {
 
             let pre_rhs_pos = self.pos;
             lhs = Box::new(SyntaxNode {
-                data: SyntaxData::Binary { l: lhs, r: self.parse_term()?, op: compare_op },
+                data: SyntaxData::Binary { l: lhs, r: self.parse_bit_shift()?, op: compare_op },
                 first_tk: pre_rhs_pos,
                 end_tk: self.pos,
             });
@@ -638,7 +665,56 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         Ok(lhs)
     }
 
+    fn parse_conditional(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
+        let first_tk_pos = self.pos;
 
+        let check_expr = self.parse_or()?;
+
+        if self.tokens[self.pos].kind != TokenKind::QMark {
+            return Ok(check_expr);
+        }
+        self.consume();
+
+        let left_expr = self.parse_assign()?;
+
+        let maybe_colon_tk = &self.tokens[self.pos];
+        CONSUME_OF!(self.consume(),ParseErr {
+            culprit: maybe_colon_tk.clone(),
+            msg: "Expected ':' in conditional ternary here.",
+            line: maybe_colon_tk.line
+        },maybe_colon_tk.clone(), TokenKind::Colon);
+
+        let right_expr = self.parse_assign()?;
+
+        Ok(Box::new(SyntaxNode {
+            data: SyntaxData::Cond {
+                check: check_expr, l: left_expr, r: right_expr
+            },
+            first_tk: first_tk_pos,
+            end_tk: self.pos
+        }))
+    }
+
+    fn parse_assign(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
+        let first_tk_pos = self.pos;
+
+        let maybe_cond_or_dest_expr = self.parse_conditional()?;
+
+        if self.tokens[self.pos].kind != TokenKind::OperatorAssign {
+            return Ok(maybe_cond_or_dest_expr);
+        }
+        self.consume();
+
+        let right_expr = self.parse_assign()?;
+
+        Ok(Box::new(SyntaxNode {
+            data: SyntaxData::Assign {
+                dest: maybe_cond_or_dest_expr, src: right_expr
+            },
+            first_tk: first_tk_pos,
+            end_tk: self.pos
+        }))
+    }
 
     fn parse_stmt(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
         match self.tokens[self.pos].kind {
@@ -724,7 +800,7 @@ impl<'external_content_lt> Parser<'external_content_lt> {
         let lparen_tk = &self.tokens[self.pos];
         CONSUME_OF!(self.consume(), ParseErr { culprit: lparen_tk.clone(), msg: "Expected '(' opening an if-condition here.", line: lparen_tk.line }, lparen_tk.clone(), TokenKind::LeftParen);
 
-        let cond = self.parse_or()?;
+        let cond = self.parse_assign()?;
 
         let rparen_tk = &self.tokens[self.pos];
         CONSUME_OF!(self.consume(), ParseErr { culprit: rparen_tk.clone(), msg: "Expected ')' closing an if-condition here.", line: rparen_tk.line }, rparen_tk.clone(), TokenKind::RightParen);
@@ -896,35 +972,17 @@ impl<'external_content_lt> Parser<'external_content_lt> {
 
     fn parse_expr_stmt(&mut self) -> Result<Box<SyntaxNode>, ParseErr> {
         let first_tk_pos = self.pos;
-        let dest = self.parse_or()?;
 
-        if self.tokens[self.pos].kind == TokenKind::OperatorAssign {
-            self.consume();
-
-            let src = self.parse_or()?;
-
-            let semicolon_tk = &self.tokens[self.pos];
-            CONSUME_OF!(self.consume(), ParseErr { culprit: semicolon_tk.clone(), msg: "Expected ';' ending this assignment.", line: semicolon_tk.line }, semicolon_tk.clone(), TokenKind::Semicolon);
-
-            return Ok(Box::new(SyntaxNode {
-                data: SyntaxData::ExprStmt {
-                    inner: Box::new(SyntaxNode {
-                        data: SyntaxData::Assign {
-                            dest, src
-                        },
-                        first_tk: first_tk_pos,
-                        end_tk: self.pos,
-                    })
-                },
-                first_tk: first_tk_pos,
-                end_tk: self.pos,
-            }));
-        }
+        let inner_expr = self.parse_assign()?;
 
         let semicolon_tk = &self.tokens[self.pos];
         CONSUME_OF!(self.consume(), ParseErr { culprit: semicolon_tk.clone(), msg: "Expected ';' ending this assignment.", line: semicolon_tk.line }, semicolon_tk.clone(), TokenKind::Semicolon);
 
-        Ok(dest)
+        Ok(Box::new(SyntaxNode {
+            data: SyntaxData::ExprStmt { inner: inner_expr },
+            first_tk: first_tk_pos,
+            end_tk: self.pos
+        }))
     }
 
     pub fn parse_data(&mut self) -> Option<Vec<Box<SyntaxNode>>> {

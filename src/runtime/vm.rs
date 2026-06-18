@@ -1,7 +1,8 @@
+use crate::runtime::opaque::JSInternalTag;
 use crate::runtime::values::{JSVTag, JSValue};
 use crate::runtime::objects::{DUD_POOL_ID};
 use crate::runtime::property::AddPropHint;
-use crate::runtime::code::{Opcode};
+use crate::runtime::code::{Opcode, JSGlobalConstID};
 use crate::runtime::ctx::{ CallFrame, EvalStatus, JSContext};
 
 
@@ -167,14 +168,30 @@ unsafe fn op_set_local(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
+unsafe fn op_init_var(context: &mut JSContext, stack: *mut JSValue) {
+    unsafe {
+        let Some(env_obj_id) = context.frames.last().expect("Expected JS lexical environment in vm.rs: op_set_var").env_v.get_obj_id() else { context.status = EvalStatus::BadAccess; return; };
+
+        let key_id = stack.add(context.sp as usize - 1).as_ref_unchecked().get_str_id().unwrap_or(0) as usize;
+        let temp_value = stack.add(context.sp as usize).as_ref_unchecked();
+        let ic_id = context.ip.read().flags & 0x7fff;
+
+        if context.set_property_data_mut(env_obj_id, key_id, ic_id,  AddPropHint::Data, temp_value) {
+            context.sp -= 2;
+            context.ip = context.ip.add(1);
+        } else {
+            eprintln!("See vm.rs ~ op_init_var");
+            context.status = EvalStatus::BadAccess;
+        }
+    }
+}
+
 unsafe fn op_get_var(context: &mut JSContext, stack: *mut JSValue) {
     unsafe {
         let Some(env_obj_id) = context.frames.last().expect("Expected JS lexical environment in vm.rs: op_get_var").env_v.get_obj_id() else { context.status = EvalStatus::BadAccess; return; };
+
         let key_id = stack.add(context.sp as usize).as_ref_unchecked().get_str_id().unwrap_or(0) as usize;
         let ic_id = context.ip.read().flags & 0x7fff; // ! 16th bit saved as special flag IF an IC is present
-
-        // print!("op_get_var:\nenv_obj_id = ");
-        // dbg!(env_obj_id);
 
         if let Some(result_v) = context.get_property_data_value(env_obj_id, key_id, ic_id, false) {
             *stack.add(context.sp as usize) = result_v;
@@ -187,14 +204,17 @@ unsafe fn op_get_var(context: &mut JSContext, stack: *mut JSValue) {
 }
 
 unsafe fn op_set_var(context: &mut JSContext, stack: *mut JSValue) {
+    context.sp -= 1;
+
     unsafe {
         let Some(env_obj_id) = context.frames.last().expect("Expected JS lexical environment in vm.rs: op_set_var").env_v.get_obj_id() else { context.status = EvalStatus::BadAccess; return; };
-        let key_id = stack.add(context.sp as usize - 1).as_ref_unchecked().get_str_id().unwrap_or(0) as usize;
-        let temp_value = stack.add(context.sp as usize).as_ref_unchecked();
+
+        let key_id = stack.add(context.sp as usize).as_ref_unchecked().get_str_id().unwrap_or(0) as usize;
+        let temp_value = stack.add(context.sp as usize + 1).as_ref_unchecked();
         let ic_id = context.ip.read().flags & 0x7fff;
 
         if context.set_property_data_mut(env_obj_id, key_id, ic_id,  AddPropHint::Data, temp_value) {
-            context.sp -= 2;
+            *stack.add(context.sp as usize) = *temp_value;
             context.ip = context.ip.add(1);
         } else {
             eprintln!("See vm.rs ~ op_set_var");
@@ -397,6 +417,44 @@ unsafe fn op_dec_prop(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
+/// **NOTE:** Converts a function reference on the stack into a closure that uses the current env or a child env.
+unsafe fn op_make_closure(context: &mut JSContext, stack: *mut JSValue) {
+    unsafe {
+        let callable_oid = stack.add(context.sp as usize).as_ref_unchecked().get_obj_id().unwrap_or(DUD_POOL_ID);
+
+        // println!("DEBUG vm.rs, op_make_closure:\ncallable_oid = {callable_oid}");
+
+        *stack.add(context.sp as usize) = context.create_closure_obj(callable_oid);
+        context.ip = context.ip.add(1);
+    }
+}
+
+unsafe fn op_query_type(context: &mut JSContext, stack: *mut JSValue) {
+    unsafe {
+        let temp_v = stack.add(context.sp as usize).as_ref_unchecked();
+
+        let type_name_v = match temp_v {
+            JSValue::Undefined => context.global_consts[JSGlobalConstID::TypenameUndefined as usize],
+            JSValue::Null => context.global_consts[JSGlobalConstID::TypenameObject as usize],
+            JSValue::Boolean(_) => context.global_consts[JSGlobalConstID::TypenameBoolean as usize],
+            JSValue::Number(_) => context.global_consts[JSGlobalConstID::TypenameNumber as usize],
+            JSValue::StringId(_) => context.global_consts[JSGlobalConstID::TypenameString as usize],
+            JSValue::ObjectId(oid) => if let Some(obj_ptr) = context.heap.get_item(*oid) {
+                if obj_ptr.opaque.has_discriminant(JSInternalTag::Empty) {
+                    context.global_consts[JSGlobalConstID::TypenameObject as usize]
+                } else {
+                    context.global_consts[JSGlobalConstID::TypenameFunction as usize]
+                }
+            } else {
+                context.global_consts[JSGlobalConstID::TypenameUndefined as usize]
+            }
+        };
+
+        *stack.add(context.sp as usize) = type_name_v;
+        context.ip = context.ip.add(1);
+    }
+}
+
 unsafe fn op_force_bool(context: &mut JSContext, stack: *mut JSValue) {
     unsafe {
         let truthiness = match stack.add(context.sp as usize).as_ref_unchecked() {
@@ -521,7 +579,6 @@ unsafe fn op_sub(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
-#[allow(unused)]
 unsafe fn op_bt_flip(context: &mut JSContext, stack: *mut JSValue) {
     unsafe {
         let arg_p = stack.add(context.sp as usize);
@@ -533,7 +590,38 @@ unsafe fn op_bt_flip(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
-#[allow(unused)]
+unsafe fn op_bt_ls(context: &mut JSContext, stack: *mut JSValue) {
+    context.sp -= 1;
+
+    unsafe {
+        let lhs_p = stack.add(context.sp as usize);
+        let rhs_sh = context.jsvalue_to_u32(
+            stack.add(context.sp as usize + 1).as_ref_unchecked()
+        ) & 0x1F;
+
+        *lhs_p = JSValue::Number(
+            (context.jsvalue_to_i32(lhs_p.as_ref_unchecked()) << rhs_sh) as f64
+        );
+        context.ip = context.ip.add(1);
+    }
+}
+
+unsafe fn op_bt_rs(context: &mut JSContext, stack: *mut JSValue) {
+    context.sp -= 1;
+
+    unsafe {
+        let lhs_p = stack.add(context.sp as usize);
+        let rhs_sh = context.jsvalue_to_u32(
+            stack.add(context.sp as usize + 1).as_ref_unchecked()
+        ) & 0x1F;
+
+        *lhs_p = JSValue::Number(
+            (context.jsvalue_to_i32(lhs_p.as_ref_unchecked()) >> rhs_sh) as f64
+        );
+        context.ip = context.ip.add(1);
+    }
+}
+
 unsafe fn op_bt_and(context: &mut JSContext, stack: *mut JSValue) {
     context.sp -= 1;
 
@@ -548,7 +636,6 @@ unsafe fn op_bt_and(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
-#[allow(unused)]
 unsafe fn op_bt_xor(context: &mut JSContext, stack: *mut JSValue) {
     context.sp -= 1;
 
@@ -563,7 +650,6 @@ unsafe fn op_bt_xor(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
-#[allow(unused)]
 unsafe fn op_bt_or(context: &mut JSContext, stack: *mut JSValue) {
     context.sp -= 1;
 
@@ -614,7 +700,6 @@ unsafe fn op_strict_ne(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
-#[allow(unused)]
 unsafe fn op_loose_eq(context: &mut JSContext, stack: *mut JSValue) {
     context.sp -= 1;
 
@@ -639,7 +724,6 @@ unsafe fn op_loose_eq(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
-#[allow(unused)]
 unsafe fn op_loose_ne(context: &mut JSContext, stack: *mut JSValue) {
     context.sp -= 1;
 
@@ -664,10 +748,31 @@ unsafe fn op_loose_ne(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
-#[allow(unused)]
 unsafe fn op_lt(context: &mut JSContext, stack: *mut JSValue) {
-    // todo
-    context.status = EvalStatus::BadOp;
+    context.sp -= 1;
+
+    unsafe {
+        let lhs_v = stack.add(context.sp as usize).as_ref_unchecked();
+        let rhs_v = stack.add(context.sp as usize + 1).as_ref_unchecked();
+
+        if let Some(lhs_sid) = lhs_v.get_str_id() && let Some(rhs_sid) = rhs_v.get_str_id() {
+            let lhs_str = context.spool.get_item(lhs_sid).expect("Expected LHS string at op_lt");
+            let rhs_str = context.spool.get_item(rhs_sid).expect("Expected LHS string at op_lt");
+
+            *stack.add(context.sp as usize) = JSValue::Boolean(lhs_str < rhs_str);
+        } else {
+            let lhs_num = context.jsvalue_to_number(lhs_v);
+            let rhs_num = context.jsvalue_to_number(rhs_v);
+
+            if lhs_num.is_nan() || rhs_num.is_nan() {
+                *stack.add(context.sp as usize) = JSValue::Undefined;
+            } else {
+                *stack.add(context.sp as usize) = JSValue::Boolean(lhs_num < rhs_num);
+            }
+        }
+
+        context.ip = context.ip.add(1);
+    }
 }
 
 #[allow(unused)]
@@ -676,10 +781,31 @@ unsafe fn op_lte(context: &mut JSContext, stack: *mut JSValue) {
     context.status = EvalStatus::BadOp;
 }
 
-#[allow(unused)]
 unsafe fn op_gt(context: &mut JSContext, stack: *mut JSValue) {
-    // todo
-    context.status = EvalStatus::BadOp;
+    context.sp -= 1;
+
+    unsafe {
+        let lhs_v = stack.add(context.sp as usize).as_ref_unchecked();
+        let rhs_v = stack.add(context.sp as usize + 1).as_ref_unchecked();
+
+        if let Some(lhs_sid) = lhs_v.get_str_id() && let Some(rhs_sid) = rhs_v.get_str_id() {
+            let lhs_str = context.spool.get_item(lhs_sid).expect("Expected LHS string at op_lt");
+            let rhs_str = context.spool.get_item(rhs_sid).expect("Expected LHS string at op_lt");
+
+            *stack.add(context.sp as usize) = JSValue::Boolean(lhs_str > rhs_str);
+        } else {
+            let lhs_num = context.jsvalue_to_number(lhs_v);
+            let rhs_num = context.jsvalue_to_number(rhs_v);
+
+            if lhs_num.is_nan() || rhs_num.is_nan() {
+                *stack.add(context.sp as usize) = JSValue::Undefined;
+            } else {
+                *stack.add(context.sp as usize) = JSValue::Boolean(lhs_num > rhs_num);
+            }
+        }
+
+        context.ip = context.ip.add(1);
+    }
 }
 
 #[allow(unused)]
@@ -795,18 +921,21 @@ pub fn run_vm(context: &mut JSContext) -> EvalStatus {
                 Opcode::Discard => op_discard(context, stack_base_ptr),
                 Opcode::GetLocal => op_get_local(context, stack_base_ptr),
                 Opcode::SetLocal => op_set_local(context, stack_base_ptr),
+                Opcode::InitVar => op_init_var(context, stack_base_ptr),
                 Opcode::GetVar => op_get_var(context, stack_base_ptr),
                 Opcode::SetVar => op_set_var(context, stack_base_ptr),
                 Opcode::MakeObj => op_make_obj(context, stack_base_ptr),
                 Opcode::GetProp => op_get_prop(context, stack_base_ptr),
                 Opcode::SetProp => op_set_prop(context, stack_base_ptr),
-                Opcode::DelProp => op_del_prop(context, stack_base_ptr),
+                Opcode::Delete => op_del_prop(context, stack_base_ptr),
                 Opcode::GetProto => op_get_proto(context, stack_base_ptr),
                 Opcode::SetProto => op_set_proto(context, stack_base_ptr),
                 Opcode::IncLocal => op_inc_local(context, stack_base_ptr),
                 Opcode::DecLocal => op_dec_local(context, stack_base_ptr),
                 Opcode::IncProp => op_inc_prop(context, stack_base_ptr),
                 Opcode::DecProp => op_dec_prop(context, stack_base_ptr),
+                Opcode::MakeClosure => op_make_closure(context, stack_base_ptr),
+                Opcode::GetType => op_query_type(context, stack_base_ptr),
                 Opcode::ForceBool => op_force_bool(context, stack_base_ptr),
                 Opcode::ForceNum => op_force_num(context, stack_base_ptr),
                 Opcode::NegBool => op_neg_bool(context, stack_base_ptr),
@@ -817,6 +946,8 @@ pub fn run_vm(context: &mut JSContext) -> EvalStatus {
                 Opcode::Add => op_add(context, stack_base_ptr),
                 Opcode::Sub => op_sub(context, stack_base_ptr),
                 Opcode::BtFlip => op_bt_flip(context, stack_base_ptr),
+                Opcode::BtLs => op_bt_ls(context, stack_base_ptr),
+                Opcode::BtRs => op_bt_rs(context, stack_base_ptr),
                 Opcode::BtAnd => op_bt_and(context, stack_base_ptr),
                 Opcode::BtOr => op_bt_or(context, stack_base_ptr),
                 Opcode::BtXor => op_bt_xor(context, stack_base_ptr),
@@ -835,9 +966,6 @@ pub fn run_vm(context: &mut JSContext) -> EvalStatus {
                 Opcode::CallCtor => op_call_ctor(context, stack_base_ptr),
                 Opcode::NativeCall => op_native_call(context, stack_base_ptr),
                 Opcode::Ret => op_ret(context, stack_base_ptr),
-                // _ => {
-                //     context.status = EvalStatus::BadOp;
-                // }
             };
         }
     }

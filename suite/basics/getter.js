@@ -5,4 +5,4 @@ var data = {
     }
 };
 
-data.answer === 67;
+return data.answer === 67;

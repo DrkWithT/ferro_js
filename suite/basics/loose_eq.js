@@ -18,4 +18,4 @@ if (this != NaN) {
     ok++;
 }
 
-ok === 4;
+return ok === 4;

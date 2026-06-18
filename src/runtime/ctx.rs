@@ -6,7 +6,9 @@ use crate::runtime::values::JSValue;
 use crate::runtime::shape::{DUD_SHAPE_ID, Shape};
 use crate::runtime::property::{AddPropHint, PropFlag, Property};
 use crate::runtime::code::{Instruction, InlineCache, JSFuncFlag, Chunk, Program};
-use crate::runtime::objects::{DUD_POOL_ID, ExoticObject, ItemPool, JS_OBJECT_COST, JS_STRING_COST, JSObjPtr, JSOpaque, JSStrPtr, ShapePool};
+use crate::runtime::closure::JSClosure;
+use crate::runtime::opaque::{JSInternalTag, JSOpaque};
+use crate::runtime::objects::{DUD_POOL_ID, ExoticObject, ItemPool, JS_OBJECT_COST, JS_STRING_COST, JSObjPtr, JSStrPtr, JS_CLOSURE_COST, JSClosurePtr, ShapePool};
 
 /// ### ABOUT
 /// Indicates status of VM execution. See each enum member for a quick description.
@@ -46,7 +48,7 @@ pub struct CallFrame {
     ///  - 2: Holds a custom `this` Value from `Function.call()`.
     ///  - 3: If `use strict` applies, do not coerce `this` to globalThis. Otherwise, do so.
     pub env_v: JSValue,
-    pub callee_p: JSValue,
+    pub caller_v: JSValue,
     pub caller_rip: *const Instruction,
     pub caller_icp: *mut InlineCache,
     pub caller_cvp: *const JSValue,
@@ -58,7 +60,7 @@ impl Default for CallFrame {
     fn default() -> Self {
         Self {
             env_v: JSValue::Undefined,
-            callee_p: JSValue::Undefined,
+            caller_v: JSValue::Undefined,
             caller_rip: std::ptr::null(),
             caller_icp: std::ptr::null_mut(),
             caller_cvp: std::ptr::null(),
@@ -81,11 +83,13 @@ pub struct JSContext {
     pub heap: ItemPool<JSObjPtr, JS_OBJECT_COST>,
     /// Holds interned strings.
     pub spool: ItemPool<JSStrPtr, JS_STRING_COST>,
+    pub closures: ItemPool<JSClosurePtr, JS_CLOSURE_COST>,
     pub shapes: ShapePool,
     pub frames: Vec<CallFrame>,
     /// Holds pre-allocated buffer of JSValues.
     pub stack: Vec<JSValue>,
     pub top_code: Vec<Box<Chunk>>,
+    pub global_consts: Vec<JSValue>,
     pub ip: *const Instruction,
     pub icp: *mut InlineCache,
     pub cvp: *const JSValue,
@@ -119,7 +123,7 @@ impl JSContext {
 
         let mut first_frame = CallFrame {
             env_v: JSValue::ObjectId(first_env_id),
-            callee_p: JSValue::Undefined,
+            caller_v: JSValue::Undefined,
             caller_rip: std::ptr::null(),
             caller_icp: std::ptr::null_mut(),
             caller_cvp: std::ptr::null(),
@@ -132,6 +136,7 @@ impl JSContext {
         Self {
             heap: std::mem::take(&mut program.heap),
             spool: std::mem::take(&mut program.spool),
+            closures: ItemPool::<JSClosurePtr, JS_CLOSURE_COST>::new(shape_population),
             shapes: {
                 let mut shape_buf = Vec::<Shape>::with_capacity(shape_population);
                 shape_buf.resize_with(shape_population, || {
@@ -157,6 +162,7 @@ impl JSContext {
                 temp_stack
             },
             top_code: program.chunks,
+            global_consts: std::mem::take(&mut program.global_consts),
             ip: start_ip,
             icp: start_icp,
             cvp: start_cvp,
@@ -202,18 +208,82 @@ impl JSContext {
         JSValue::ObjectId(prepared_oid)
     }
 
+    pub fn create_closure_obj(&mut self, func_oid: i32) -> JSValue {
+        let maybe_closure: Option<JSClosure> = if let Some(func_chunk) = self.heap.get_item_mut(func_oid) {
+            unsafe {
+                let func_code = func_chunk.opaque.as_bytecode();
+
+                if func_code.is_null() {
+                    eprintln!("Failed to get function code of ferrojs-oid-{func_oid}");
+                    None
+                } else {
+                    Some(JSClosure::new(
+                        self.create_child_env(),
+                        func_code
+                    ))
+                }
+            }
+        } else {
+            None
+        };
+
+        if maybe_closure.is_none() {
+            eprintln!("Failed to create closure of ferrojs-oid-{func_oid}");
+            self.status = EvalStatus::BadAccess;
+            return JSValue::Null;
+        }
+
+        let closure = maybe_closure.unwrap();
+
+        let Some(closure_id) = self.closures.add_item(Some(RefCell::new(
+            closure
+        ))) else {
+            eprintln!("Failed to save closure of ferrojs-oid-{func_oid}");
+            self.status = EvalStatus::BadAlloc;
+            return JSValue::Null;
+        };
+
+        self.heap.add_item(
+            Some(RefCell::new(ExoticObject::with_opaque(
+                JSOpaque::closure_id(closure_id)
+            )))
+        )
+        .map(|cls_oid| Some(JSValue::ObjectId(cls_oid)))
+        .unwrap_or(Some(JSValue::Null)).unwrap()
+    }
+
     pub fn try_invoke_obj(&mut self, v: &JSValue, argc: u16) -> EvalStatus {
         let Some(func_oid) = v.get_obj_id() else {
             return EvalStatus::BadOp;
         };
 
-        let env_v = if 0 != (self.heap.get_item(func_oid).expect("Expected func-reference for object ID at ctx.rs ~ try_invoke_obj").opaque.flags & JSFuncFlag::NeedsEnv as u8) {
-            self.create_child_env()
-        } else {
-            self.get_curr_env()
-        };
+        let JSOpaque {internal, tag, ..} = self.heap.get_item(func_oid).expect("Expected opaque data for object ID at ctx.rs ~ try_invoke_obj").opaque;
 
         unsafe {
+            let (chunk_p, env_v) = match tag {
+                JSInternalTag::Code => {
+                    // println!("DEBUG ctx.rs ~ try_invoke_obj: run normal function of oid-{}", func_oid);
+                    (
+                        internal.code,
+                        if 0 != (internal.code.as_ref().unwrap().flags & JSFuncFlag::NeedsEnv as u8) {
+                            self.create_child_env()
+                        } else {
+                            self.get_curr_env()
+                        }
+                    )
+                },
+                JSInternalTag::ClosureID => {
+                    // println!("DEBUG ctx.rs ~ try_invoke_obj: run closure-id-{}", internal.closure_id);
+                    let JSClosure {env, code} = self.closures.get_item(internal.closure_id).expect("Expected valid closure at ctx.rs ~ try_invoke_obj");
+
+                    (*code, *env)
+                },
+                _ => {
+                    // println!("DEBUG ctx.rs ~ try_invoke_obj: invalid, non-callable object...");
+                    (std::ptr::null_mut(), JSValue::Undefined)
+                }
+            };
+
             let caller_rip = self.ip.add(1);
             let caller_icp = self.icp;
             let caller_cvp = self.cvp;
@@ -225,7 +295,7 @@ impl JSContext {
 
             self.frames.push(CallFrame {
                 env_v,
-                callee_p: self.frames.last().unwrap().callee_p,
+                caller_v: self.frames.last().unwrap().caller_v,
                 caller_rip,
                 caller_icp,
                 caller_cvp,
@@ -234,9 +304,9 @@ impl JSContext {
             });
 
             self.bp = callee_bp;
-            self.ip = self.heap.get_item(func_oid).unwrap().opaque.as_bytecode().as_ref_unchecked().code.as_ptr();
-            self.cvp = self.heap.get_item(func_oid).unwrap().opaque.as_bytecode().as_ref_unchecked().consts.as_ptr();
-            self.icp = self.heap.get_item(func_oid).unwrap().opaque.as_bytecode().as_mut_unchecked().icaches.as_mut_ptr();
+            self.ip = chunk_p.as_ref_unchecked().code.as_ptr();
+            self.cvp = chunk_p.as_ref_unchecked().consts.as_ptr();
+            self.icp = chunk_p.as_mut_unchecked().icaches.as_mut_ptr();
         }
 
         self.cd += 1;
@@ -359,9 +429,15 @@ impl JSContext {
     }
 
     pub fn get_property_data_value(&mut self, oid: i32, key_id: usize, ic_id: u16, try_use_getter: bool) -> Option<JSValue> {
+        if oid == DUD_POOL_ID {
+            return None;
+        }
+
+        // println!("key of str-id-{key_id}: '{}'", self.spool.get_item(key_id as i32).expect("Expected valid string constant for ID in get_property_data_value"));
+
         let my_shape_id = self.heap.get_item(oid).unwrap().shape;
 
-        // dbg!(my_shape_id);
+        // println!("DEBUG get_property_data_value: oid = {oid}, key_id = {key_id}");
 
         let (prop_offset, ic_dirty) = unsafe {
             if let Some (ic_slot) = self.icp.add(ic_id as usize).as_mut().unwrap().find(my_shape_id, key_id) {
@@ -377,14 +453,8 @@ impl JSContext {
 
         let parent_env_oid = self.heap.get_item(oid).unwrap().in_proto.get_obj_id();
 
-        // println!("In objects.rs at JSObjectWrap::get_property_data_value:");
-        // dbg!(my_data.in_proto);
-        // dbg!(prop_offset);
-
         if prop_offset.is_none() {
-            parent_env_oid?;
-
-            let parent_oid = parent_env_oid.unwrap();
+            let parent_oid = parent_env_oid.unwrap_or(DUD_POOL_ID);
 
             return self.get_property_data_value(parent_oid, key_id, ic_id, try_use_getter);
         }
@@ -434,6 +504,9 @@ impl JSContext {
 
     pub fn set_property_data_mut(&mut self, oid: i32, key_id: usize, ic_id: u16, hint: AddPropHint, arg: &JSValue) -> bool {
         let my_shape_id = self.heap.get_item(oid).unwrap().shape;
+
+        // println!("key of str-id-{key_id}: '{}'", self.spool.get_item(key_id as i32).expect("Expected valid string constant for ID in set_property_data_mut"));
+        // println!("DEBUG set_property_data_mut: oid = {oid}, key_id = {key_id}");
 
         let (prop_offset, ic_dirty, shape_dirty) = unsafe {
             if let Some (ic_slot) = self.icp.add(ic_id as usize).as_mut().unwrap().find(my_shape_id, key_id) {

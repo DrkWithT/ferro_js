@@ -22,18 +22,21 @@ pub enum Opcode {
     Discard,
     GetLocal,
     SetLocal,
+    InitVar,
     GetVar,
     SetVar,
     MakeObj,
     GetProp,
     SetProp,
-    DelProp,
+    Delete,
     GetProto,
     SetProto,
     IncLocal,
     DecLocal,
     IncProp,
     DecProp,
+    MakeClosure,
+    GetType,
     ForceBool,
     ForceNum,
     NegBool,
@@ -44,6 +47,8 @@ pub enum Opcode {
     Add,
     Sub,
     BtFlip,
+    BtLs,
+    BtRs,
     BtAnd,
     BtOr,
     BtXor,
@@ -82,18 +87,21 @@ pub const OPCODE_NAMES: &[&str] = &[
     "Discard",  // ? Pops an expression's result and puts `undefined`
     "GetLocal", // ? Uses constant offset via immediate arg
     "SetLocal", // ? Uses constant offset via immediate arg
+    "InitVar",  // ? Creates a var binding in the current environment object, but it doesn't leave any temporary.
     "GetVar",
-    "SetVar",
+    "SetVar",   // ? Like InitVar, but leaves a temporary. Handles `=`.
     "MakeObj",
     "GetProp",
     "SetProp",
-    "DelProp",
+    "Delete",   // ? Tries to delete a property. Flag 0 => noop-true, 1 => loose mode, 2 => strict mode
     "GetProto",
     "SetProto", // ? Uses a "builtin" flag: If 1, an intrinsic prototype via ID is put. Otherwise, the stack's top-most JSValue is used.
     "IncLocal",
     "DecLocal",
     "IncProp",
     "DecProp",
+    "MakeClosure",
+    "GetType",  // ? Handles `typeof <target>` operations.
     "ForceBool",
     "ForceNum",
     "NegBool",
@@ -104,6 +112,8 @@ pub const OPCODE_NAMES: &[&str] = &[
     "Add",
     "Sub",
     "BtFlip",
+    "BtLs",
+    "BtRs",
     "BtAnd",
     "BtOr",
     "BtXor",
@@ -286,6 +296,23 @@ pub enum JSFuncFlag {
     IsStrict = (1 << 3),
 }
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum JSGlobalConstID {
+    TypenameUndefined,
+    TypenameBoolean,
+    TypenameNumber,
+    TypenameString,
+    TypenameObject,
+    TypenameFunction,
+    Last,
+}
+
+pub const JS_GLOBAL_CONST_N: usize = JSGlobalConstID::Last as usize;
+pub const JS_DELETE_FLAG_NOOP: u16 = 0;
+pub const JS_DELETE_FLAG_LOOSE: u16 = 1;
+pub const JS_DELETE_FLAG_STRICT: u16 = 2;
+
 #[derive(Debug, Default, Clone)]
 pub struct Chunk {
     pub icaches: Vec<InlineCache>,
@@ -303,14 +330,19 @@ pub struct Program {
     pub spool: ItemPool<JSStrPtr, JS_STRING_COST>,
     /// Bytecode of JS code Boxes. This is for pointer stability so each exotic object can have a mutable-view ptr to the same chunk address.
     pub chunks: Vec<Box<Chunk>>,
+    pub global_consts: Vec<JSValue>,
     /// Saved script file-path
     pub name: String,
 }
 
-pub fn dump_chunk(chunk: &Chunk, id_num: u16) {
+pub fn dump_chunk(chunk: &Chunk, id_num: Option<u16>) {
     let Chunk { consts, code , .. } = chunk;
 
-    println!("---- Chunk of oid-{id_num} ----\n\n");
+    if let Some(chunk_id) = id_num {
+        println!("---- Chunk of oid-{chunk_id} ----\n\n");
+    } else {
+        println!("---- Chunk of MAIN ----\n\n");
+    }
 
     println!("--- CONSTS ---\n");
 
@@ -330,9 +362,9 @@ pub fn dump_chunk(chunk: &Chunk, id_num: u16) {
 pub fn dump_bytecode(program: &Program) {
     let Program {heap , chunks, name, ..} = program;
 
-    println!("---- PROGRAM '{name}' ----\n");
+    println!("---- PROGRAM '{name}' ----\n--- MAIN ---\n");
 
-    dump_chunk(chunks.first().unwrap(), 0);
+    dump_chunk(chunks.last().unwrap(), None);
 
     println!("--- FUNCTIONS ---\n");
 
@@ -346,7 +378,7 @@ pub fn dump_bytecode(program: &Program) {
                     let flags = chunk_ptr.as_ref_unchecked().flags;
 
                     println!("\x1b[1;33mFunction\x1b[0m(arity = \x1b[1;31m{arity}\x1b[0m, flags = \x1b[1;31m{flags}\x1b[0m)\n");
-                    dump_chunk(chunk_ptr.as_ref_unchecked(), oid as u16);
+                    dump_chunk(chunk_ptr.as_ref_unchecked(), Some(oid as u16));
                 }
             }
         }

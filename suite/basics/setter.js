@@ -10,4 +10,4 @@ var data = {
 
 data.X = 1;
 
-data.x;
+return data.x;
