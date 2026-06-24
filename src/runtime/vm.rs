@@ -898,7 +898,7 @@ unsafe fn op_ret(context: &mut JSContext, stack: *mut JSValue) {
     }
 }
 
-pub fn run_vm(context: &mut JSContext) -> EvalStatus {
+pub fn run_vm(context: &mut JSContext) -> (JSValue, EvalStatus) {
     unsafe {
         let stack_base_ptr = context.stack.as_mut_ptr();
         let context_stack_p = context.stack.as_mut_ptr();
@@ -970,5 +970,5 @@ pub fn run_vm(context: &mut JSContext) -> EvalStatus {
         }
     }
 
-    context.status
+    (context.stack[0], context.status)
 }

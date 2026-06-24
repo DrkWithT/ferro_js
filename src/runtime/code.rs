@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use crate::runtime::values::JSValue;
-use crate::runtime::objects::{DUD_POOL_ID, ItemPool, JS_OBJECT_COST, JS_STRING_COST, JSObjPtr, JSStrPtr};
+use crate::runtime::objects::{DUD_POOL_ID, ItemPool, ShapePool, JS_OBJECT_COST, JS_STRING_COST, JSObjPtr, JSStrPtr};
 
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -328,6 +328,7 @@ pub struct Program {
     pub heap: ItemPool<JSObjPtr, JS_OBJECT_COST>,
     /// Interned string pool
     pub spool: ItemPool<JSStrPtr, JS_STRING_COST>,
+    pub shapes: ShapePool,
     /// Bytecode of JS code Boxes. This is for pointer stability so each exotic object can have a mutable-view ptr to the same chunk address.
     pub chunks: Vec<Box<Chunk>>,
     pub global_consts: Vec<JSValue>,

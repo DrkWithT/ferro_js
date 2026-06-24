@@ -7,13 +7,13 @@ use crate::frontend::{
     ast::{Operator, SyntaxId, SyntaxData, SyntaxNode, PropDecl, PropDeclTag, AST},
 };
 
-use crate::runtime::opaque::JSOpaque;
-use crate::runtime::objects::{ExoticObject};
 #[allow(unused)]
 use crate::runtime::{
     code::{InlineCache, JSFuncFlag, Opcode, JS_DELETE_FLAG_NOOP, JS_DELETE_FLAG_LOOSE, JS_DELETE_FLAG_STRICT, Instruction, JSGlobalConstID, JS_GLOBAL_CONST_N, Chunk, Program},
     values::{JSValue},
-    objects::{JSObjPtr, JSStrPtr, JS_OBJECT_COST, JS_STRING_COST, ItemPool, /*ExoticObject*/},
+    opaque::JSOpaque,
+    objects::{JSObjPtr, JSStrPtr, JS_OBJECT_COST, JS_STRING_COST, ItemPool, ExoticObject, ShapePool},
+    shape::Shape,
     // funcs::{FuncBody, JSFunction},
 };
 
@@ -128,6 +128,7 @@ impl EmitterHints {
 pub struct Emitter {
     pub heap: ItemPool<JSObjPtr, JS_OBJECT_COST>,
     pub spool: ItemPool<JSStrPtr, JS_STRING_COST>,
+    pub shapes: ShapePool,
     pub chunk_buf: Vec<Box<Chunk>>,
     pub chunks: Vec<Chunk>,
     pub scopes: Vec<SymbolScope>,
@@ -139,10 +140,11 @@ pub struct Emitter {
 }
 
 impl Emitter {
-    pub fn new(object_population: usize, str_population: usize) -> Self {
+    pub fn new(shape_population: usize, object_population: usize, str_population: usize) -> Self {
         Self {
             heap: ItemPool::<JSObjPtr, JS_OBJECT_COST>::new(object_population),
             spool: ItemPool::<JSStrPtr, JS_STRING_COST>::new(str_population),
+            shapes: ShapePool::new(shape_population),
             chunk_buf: vec![],
             chunks: vec![Chunk::default()],
             scopes: vec![SymbolScope::default()],
@@ -1745,6 +1747,7 @@ impl Emitter {
             chunks: std::mem::take(&mut self.chunk_buf),
             global_consts: std::mem::take(&mut self.gconsts),
             name: name.clone(),
+            shapes: std::mem::take(&mut self.shapes)
         })
     }
 }

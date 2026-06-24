@@ -331,6 +331,19 @@ pub struct ShapePool {
 
 // Interns all object Shapes.
 impl ShapePool {
+    pub fn new(shape_capacity: usize) -> Self {
+        Self {
+            shapes: {
+                let mut temp_buffer = Vec::<Shape>::with_capacity(shape_capacity);
+
+                temp_buffer.resize_with(shape_capacity, Shape::default);
+
+                temp_buffer
+            },
+            next_sid: 1,
+        }
+    }
+
     pub fn fetch(&self, sid: i32) -> Option<&Shape> {
         self.shapes.get(sid as usize)
     }

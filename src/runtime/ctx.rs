@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::fmt::Display;
 
 use crate::runtime::values::JSValue;
-use crate::runtime::shape::{DUD_SHAPE_ID, Shape};
+use crate::runtime::shape::{DUD_SHAPE_ID};
 use crate::runtime::property::{AddPropHint, PropFlag, Property};
 use crate::runtime::code::{Instruction, InlineCache, JSFuncFlag, Chunk, Program};
 use crate::runtime::closure::JSClosure;
@@ -15,6 +15,8 @@ use crate::runtime::objects::{DUD_POOL_ID, ExoticObject, ItemPool, JS_OBJECT_COS
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EvalStatus {
+    /// Compilation to bytecode failed
+    CompileError,
     /// Execution is WIP
     Pending,
     /// Finished with no errors (excluding logical errors)
@@ -25,15 +27,19 @@ pub enum EvalStatus {
     BadAccess,
     /// Finished with memory error i.e heap failed to allocate an object
     BadAlloc,
+    /// Reached excessive recursive call depth
+    CallOverflow
 }
 
 impl Display for EvalStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", match self {
+            Self::CompileError => "Compile error!",
             Self::Ok => "OK",
             Self::BadOp => "Invalid / unimplemented opcode!",
             Self::BadAccess => "Invalid object reference / property access!",
             Self::BadAlloc => "Invalid allocation of VM heap!",
+            Self::CallOverflow => "Max recursion depth exceeded!",
             _ => "(unknown error)"
         })
     }
@@ -95,6 +101,7 @@ pub struct JSContext {
     pub cvp: *const JSValue,
     pub bp: i32,
     pub sp: i32,
+    pub cd_max: u16,
     /// recursion depth
     pub cd: u16,
     pub cm: u16,
@@ -104,7 +111,7 @@ pub struct JSContext {
 impl JSContext {
     /// ### ABOUT
     /// Constructs a new JSContext for the interpreter's VM.
-    pub fn new(shape_population: usize, stack_sizing: usize, calls_max: u16, mut program: Program) -> Self {
+    pub fn new(heap_sizing: usize, stack_sizing: usize, calls_max: u16, mut program: Program) -> Self {
         // ! NOTE: the last Chunk pushed to program.chunks is the top-level code. See emitter.rs in its last method.
         let start_ip = program.chunks.last().unwrap().code.as_ptr();
         let start_icp = program.chunks.last_mut().unwrap().icaches.as_mut_ptr();
@@ -136,18 +143,8 @@ impl JSContext {
         Self {
             heap: std::mem::take(&mut program.heap),
             spool: std::mem::take(&mut program.spool),
-            closures: ItemPool::<JSClosurePtr, JS_CLOSURE_COST>::new(shape_population),
-            shapes: {
-                let mut shape_buf = Vec::<Shape>::with_capacity(shape_population);
-                shape_buf.resize_with(shape_population, || {
-                    Shape::default()
-                });
-
-                ShapePool {
-                    shapes: shape_buf,
-                    next_sid: 1
-                }
-            },
+            closures: ItemPool::<JSClosurePtr, JS_CLOSURE_COST>::new(heap_sizing),
+            shapes: std::mem::take(&mut program.shapes),
             frames: vec![
                 first_frame
             ],
@@ -168,6 +165,7 @@ impl JSContext {
             cvp: start_cvp,
             bp: 1,
             sp: 1, // ! NOTE: maybe adjust this?
+            cd_max: calls_max,
             cd: 1,
             cm: calls_max,
             status: EvalStatus::Pending
@@ -253,6 +251,10 @@ impl JSContext {
     }
 
     pub fn try_invoke_obj(&mut self, v: &JSValue, argc: u16) -> EvalStatus {
+        if self.cd >= self.cd_max {
+            return EvalStatus::CallOverflow;
+        }
+
         let Some(func_oid) = v.get_obj_id() else {
             return EvalStatus::BadOp;
         };
