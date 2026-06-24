@@ -1,154 +1,98 @@
 pub mod frontend;
 pub mod backend;
 pub mod runtime;
+pub mod core;
 
 use std::{env::args, fs::read_to_string, process::ExitCode};
 
 use crate::{
-    backend::emitter::Emitter, frontend::{
-        ast::AST, lexer::Lexer, parser::Parser, token::TokenKind
-    },
-    runtime::{
-        code::{JSGlobalConstID, dump_bytecode}, ctx::{
-            EvalStatus, JSContext
-        }, shape::DEFAULT_SHAPE_POPULATION, values::JSValue, vm::{
-            DEFAULT_JS_RECUR_LIMIT, DEFAULT_JS_STACK_SIZE, run_vm
-        }
-    }
+    core::driver::{ Driver, DriverConfig, DriverFlag },
+    frontend::{ token::TokenKind },
+    runtime::{ code::JSGlobalConstID, ctx::EvalStatus }
 };
-
-
-const RUNTIME_NAME: &str = "    ______                    \n   / ____/__  ______________  \n  / /_  / _ \\/ ___/ ___/ __ \\ \n / __/ /  __/ /  / /  / /_/ / \n/_/    \\___/_/  /_/   \\____/ \n";
 
 fn main() -> ExitCode {
     let mut file_name: Option<String> = None;
-    let mut option_show_version = false;
-    let mut option_show_help = false;
-    let mut option_allow_bc_dump = false;
+    let mut option_bits = 0u8;
 
     for arg in args().skip(1) {
         match arg.as_str() {
-            "-v" => { option_show_version = true; },
-            "-h" => { option_show_help = true; },
-            "-d" => { option_allow_bc_dump = true; },
+            "-v" => { option_bits |= DriverFlag::ShowVersion as u8 },
+            "-h" => { option_bits |= DriverFlag::ShowHelp as u8 },
+            "-d" => { option_bits |= DriverFlag::DumpBytecode as u8 },
+            "-r" => { option_bits |= DriverFlag::RunScript as u8 },
             _ => file_name = Some(arg)
         }
-    }
-
-    if option_show_version {
-        println!("\x1b[1;31m{RUNTIME_NAME}\x1b[0m\n\x1b[1;30mv0.0.1\x1b[0m --- By: DrkWithT (GitHub)\n");
-        return ExitCode::SUCCESS;
-    } else if option_show_help {
-        println!("usage: ferrojs [-v | -h | [-d | -r] <JS file>]\n");
-        return ExitCode::SUCCESS;
     }
 
     let source_fpath = String::from("main.js");
     let source_fpath = file_name.as_ref().unwrap_or(&source_fpath).as_str();
     let source_txt = read_to_string(source_fpath);
 
-    if source_txt.is_err() {
-        eprintln!("File at {source_fpath} could not be read.");
-        return ExitCode::FAILURE;
-    }
+    let source_txt = source_txt.unwrap_or_default();
 
-    let source_txt = source_txt.unwrap();
+    let mut driver = Driver::new(DriverConfig::default());
 
-    let mut tokenizer = Lexer::new(&source_txt);
-    tokenizer.map_special_lexical("var", TokenKind::KeywordVar);
-    tokenizer.map_special_lexical("if", TokenKind::KeywordIf);
-    tokenizer.map_special_lexical("else", TokenKind::KeywordElse);
-    tokenizer.map_special_lexical("while", TokenKind::KeywordWhile);
-    tokenizer.map_special_lexical("for", TokenKind::KeywordFor);
-    tokenizer.map_special_lexical("return", TokenKind::KeywordReturn);
-    tokenizer.map_special_lexical("function", TokenKind::KeywordFunction);
-    tokenizer.map_special_lexical("new", TokenKind::KeywordNew);
-    tokenizer.map_special_lexical("this", TokenKind::KeywordThis);
-    tokenizer.map_special_lexical("typeof", TokenKind::KeywordTypeOf);
-    tokenizer.map_special_lexical("void", TokenKind::KeywordVoid);
-    tokenizer.map_special_lexical("delete", TokenKind::KeywordDelete);
-    tokenizer.map_special_lexical("get", TokenKind::KeywordGet);
-    tokenizer.map_special_lexical("set", TokenKind::KeywordSet);
-    tokenizer.map_special_lexical("++", TokenKind::OperatorPlusPlus);
-    tokenizer.map_special_lexical("--", TokenKind::OperatorMinusMinus);
-    tokenizer.map_special_lexical("!", TokenKind::OperatorBang);
-    tokenizer.map_special_lexical("%", TokenKind::OperatorPct);
-    tokenizer.map_special_lexical("*", TokenKind::OperatorTimes);
-    tokenizer.map_special_lexical("/", TokenKind::OperatorSlash);
-    tokenizer.map_special_lexical("+", TokenKind::OperatorPlus);
-    tokenizer.map_special_lexical("-", TokenKind::OperatorMinus);
-    tokenizer.map_special_lexical("===", TokenKind::OperatorStrictEquals);
-    tokenizer.map_special_lexical("!==", TokenKind::OperatorStrictUnequals);
-    tokenizer.map_special_lexical("==", TokenKind::OperatorLooseEqual);
-    tokenizer.map_special_lexical("!=", TokenKind::OperatorLooseUnequal);
-    tokenizer.map_special_lexical("<", TokenKind::OperatorLesser);
-    tokenizer.map_special_lexical("<=", TokenKind::OperatorLesserEquals);
-    tokenizer.map_special_lexical(">", TokenKind::OperatorGreater);
-    tokenizer.map_special_lexical(">=", TokenKind::OperatorGreaterEquals);
-    tokenizer.map_special_lexical("&&", TokenKind::OperatorAnd);
-    tokenizer.map_special_lexical("||", TokenKind::OperatorOr);
-    tokenizer.map_special_lexical("=", TokenKind::OperatorAssign);
-    tokenizer.map_special_lexical("~", TokenKind::OperatorBitFlip);
-    tokenizer.map_special_lexical("&", TokenKind::OperatorBitAnd);
-    tokenizer.map_special_lexical("^", TokenKind::OperatorBitXor);
-    tokenizer.map_special_lexical("|", TokenKind::OperatorBitOr);
-    tokenizer.map_special_lexical("<<", TokenKind::OperatorBShiftLeft);
-    tokenizer.map_special_lexical(">>", TokenKind::OperatorBShiftRight);
-    tokenizer.map_special_lexical("undefined", TokenKind::LiteralUndefined);
-    tokenizer.map_special_lexical("null", TokenKind::LiteralNull);
-    tokenizer.map_special_lexical("NaN", TokenKind::LiteralNaN);
-    tokenizer.map_special_lexical("Infinity", TokenKind::LiteralInfinity);
-    tokenizer.map_special_lexical("true", TokenKind::LiteralTrue);
-    tokenizer.map_special_lexical("false", TokenKind::LiteralFalse);
+    driver.add_lexical("var", TokenKind::KeywordVar);
+    driver.add_lexical("if", TokenKind::KeywordIf);
+    driver.add_lexical("else", TokenKind::KeywordElse);
+    driver.add_lexical("while", TokenKind::KeywordWhile);
+    driver.add_lexical("for", TokenKind::KeywordFor);
+    driver.add_lexical("return", TokenKind::KeywordReturn);
+    driver.add_lexical("function", TokenKind::KeywordFunction);
+    driver.add_lexical("new", TokenKind::KeywordNew);
+    driver.add_lexical("this", TokenKind::KeywordThis);
+    driver.add_lexical("typeof", TokenKind::KeywordTypeOf);
+    driver.add_lexical("void", TokenKind::KeywordVoid);
+    driver.add_lexical("delete", TokenKind::KeywordDelete);
+    driver.add_lexical("get", TokenKind::KeywordGet);
+    driver.add_lexical("set", TokenKind::KeywordSet);
+    driver.add_lexical("++", TokenKind::OperatorPlusPlus);
+    driver.add_lexical("--", TokenKind::OperatorMinusMinus);
+    driver.add_lexical("!", TokenKind::OperatorBang);
+    driver.add_lexical("%", TokenKind::OperatorPct);
+    driver.add_lexical("*", TokenKind::OperatorTimes);
+    driver.add_lexical("/", TokenKind::OperatorSlash);
+    driver.add_lexical("+", TokenKind::OperatorPlus);
+    driver.add_lexical("-", TokenKind::OperatorMinus);
+    driver.add_lexical("===", TokenKind::OperatorStrictEquals);
+    driver.add_lexical("!==", TokenKind::OperatorStrictUnequals);
+    driver.add_lexical("==", TokenKind::OperatorLooseEqual);
+    driver.add_lexical("!=", TokenKind::OperatorLooseUnequal);
+    driver.add_lexical("<", TokenKind::OperatorLesser);
+    driver.add_lexical("<=", TokenKind::OperatorLesserEquals);
+    driver.add_lexical(">", TokenKind::OperatorGreater);
+    driver.add_lexical(">=", TokenKind::OperatorGreaterEquals);
+    driver.add_lexical("&&", TokenKind::OperatorAnd);
+    driver.add_lexical("||", TokenKind::OperatorOr);
+    driver.add_lexical("=", TokenKind::OperatorAssign);
+    driver.add_lexical("~", TokenKind::OperatorBitFlip);
+    driver.add_lexical("&", TokenKind::OperatorBitAnd);
+    driver.add_lexical("^", TokenKind::OperatorBitXor);
+    driver.add_lexical("|", TokenKind::OperatorBitOr);
+    driver.add_lexical("<<", TokenKind::OperatorBShiftLeft);
+    driver.add_lexical(">>", TokenKind::OperatorBShiftRight);
+    driver.add_lexical("undefined", TokenKind::LiteralUndefined);
+    driver.add_lexical("null", TokenKind::LiteralNull);
+    driver.add_lexical("NaN", TokenKind::LiteralNaN);
+    driver.add_lexical("Infinity", TokenKind::LiteralInfinity);
+    driver.add_lexical("true", TokenKind::LiteralTrue);
+    driver.add_lexical("false", TokenKind::LiteralFalse);
 
-    let all_tokens = tokenizer.lex_all(&source_txt);
+    driver.add_global_string(JSGlobalConstID::TypenameUndefined, "undefined");
+    driver.add_global_string(JSGlobalConstID::TypenameBoolean, "boolean");
+    driver.add_global_string(JSGlobalConstID::TypenameNumber, "number");
+    driver.add_global_string(JSGlobalConstID::TypenameString, "string");
+    driver.add_global_string(JSGlobalConstID::TypenameObject, "object");
+    driver.add_global_string(JSGlobalConstID::TypenameFunction, "function");
 
-    let mut parser = Parser::new(&all_tokens, &source_txt);
-    let decls = parser.parse_data();
+    let (ferro_result, ferro_status) = driver.run(&source_txt, option_bits);
 
-    if decls.is_none() {
-        return ExitCode::FAILURE;
-    }
+    println!("{ferro_result}, {ferro_status}");
 
-    let ast = AST {
-        txt: source_txt,
-        tokens: all_tokens,
-        decls: decls.expect("Expected parsed JS decls at main.rs ~ line#97."),
-        name: source_fpath.to_owned(),
-    };
-
-    let mut bc_emitter = Emitter::new(64, 256);
-
-    bc_emitter.set_global_constant_of_str(JSGlobalConstID::TypenameUndefined, "undefined");
-    bc_emitter.set_global_constant_of_str(JSGlobalConstID::TypenameBoolean, "boolean");
-    bc_emitter.set_global_constant_of_str(JSGlobalConstID::TypenameNumber, "number");
-    bc_emitter.set_global_constant_of_str(JSGlobalConstID::TypenameString, "string");
-    bc_emitter.set_global_constant_of_str(JSGlobalConstID::TypenameObject, "object");
-    bc_emitter.set_global_constant_of_str(JSGlobalConstID::TypenameFunction, "function");
-
-    let program = bc_emitter.emit_code(&ast);
-
-    if program.is_none() {
-        return ExitCode::FAILURE;
-    }
-
-    let program = program.expect("Expected fully compiled program at main.rs ~ line#111.");
-
-    if option_allow_bc_dump {
-        dump_bytecode(&program);
-        return ExitCode::SUCCESS;
-    }
-
-    let mut vm_state = JSContext::new(DEFAULT_SHAPE_POPULATION, DEFAULT_JS_STACK_SIZE, DEFAULT_JS_RECUR_LIMIT, program);
-
-    let vm_status = run_vm(&mut vm_state);
-    let vm_result = vm_state.stack[0];
-
-    println!("{vm_result}");
-
-    if let JSValue::Boolean(b) = vm_result && vm_status == EvalStatus::Ok {
-        if b { ExitCode::SUCCESS } else { ExitCode::FAILURE }
-    } else {
+    if ferro_status == EvalStatus::Ok {
         ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
     }
 }
